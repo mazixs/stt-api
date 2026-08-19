@@ -1,0 +1,34 @@
+# В образ попадают только requirements.txt и console/ — остальное лишь утяжеляет
+# контекст сборки, а секреты и веса ему вообще незачем видеть.
+.git/
+.gitignore
+.env
+.env.*
+*.pem
+*.key
+data/
+models/
+*.wav
+*.webm
+*.mp3
+*.m4a
+*.ogg
+*.opus
+*.flac
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.playwright-mcp/
+.claude/
+.idea/
+.vscode/
+tests/
+docs/
+uv.lock

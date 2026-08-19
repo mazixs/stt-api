@@ -1,0 +1,48 @@
+# Секреты и локальные настройки: под запретом любой .env, кроме образцов.
+.env
+.env.*
+!.env.example
+!.env.local.example
+*.pem
+*.key
+*.p12
+secrets.*
+
+# Тома контейнера: состояние, глоссарий, веса моделей.
+data/
+models/
+
+# Записи и аудио, попавшие в папку при проверках.
+*.wav
+*.webm
+*.mp3
+*.m4a
+*.ogg
+*.opus
+*.flac
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Инструменты и редакторы
+.playwright-mcp/
+.claude/settings.local.json
+.idea/
+.vscode/
+.DS_Store
+*.log
+
+# Инструкции для агента: локальный файл, в паблик не уходит.
+CLAUDE.md

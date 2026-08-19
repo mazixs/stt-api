@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>STT-консоль · GigaAM v3</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='14'>🎙️</text></svg>">
+</head>
+<body>
+<div class="shell">
+
+  <header class="masthead">
+    <div class="masthead-id">
+      <span class="mono eyebrow">локальное распознавание речи</span>
+      <h1>GigaAM v3 <span class="dim">/ STT-консоль</span></h1>
+    </div>
+    <div class="masthead-state">
+      <span id="state-pill" class="pill" data-state="stopped"><i></i><span id="state-label">загрузка…</span></span>
+      <span id="key-badge" class="mono badge hidden">ключ включён</span>
+    </div>
+  </header>
+
+  <section class="module" id="section-status">
+    <div class="module-head">
+      <span class="mono eyebrow">Статус</span>
+      <button id="btn-stop" class="btn btn-quiet hidden" type="button">Остановить</button>
+    </div>
+    <p id="state-detail" class="detail">—</p>
+    <div id="progress" class="progress hidden"><div id="progress-bar"></div><span id="progress-text" class="mono"></span></div>
+    <dl class="readout">
+      <div><dt class="mono">модель</dt><dd id="ro-variant" class="mono num">—</dd></div>
+      <div><dt class="mono">задержка, среднее</dt><dd id="ro-elapsed" class="mono num">—</dd></div>
+      <div><dt class="mono">быстрее речи</dt><dd id="ro-rtf" class="mono num">—</dd></div>
+      <div><dt class="mono">файлов за всё время</dt><dd id="ro-total" class="mono num">—</dd></div>
+      <div><dt class="mono">перезапусков движка</dt><dd id="ro-restarts" class="mono num">—</dd></div>
+      <div><dt class="mono">консоль работает</dt><dd id="ro-uptime" class="mono num">—</dd></div>
+    </dl>
+    <div id="recent" class="recent hidden">
+      <p class="mono eyebrow">последние файлы</p>
+      <table class="recent-table">
+        <thead><tr><th>файл</th><th>запись</th><th>распознавание</th><th>быстрее речи</th></tr></thead>
+        <tbody id="recent-rows"></tbody>
+      </table>
+      <p id="recent-note" class="mono dim"></p>
+    </div>
+  </section>
+
+  <section class="module" id="section-models">
+    <div class="module-head"><span class="mono eyebrow">Модели</span></div>
+    <p class="detail">Выберите голову распознавания. Первый запуск скачивает веса один раз — дальше они лежат в томе <code>./models</code>.</p>
+    <div id="heads" class="heads"></div>
+
+    <details class="options">
+      <summary class="mono">Настройки запуска</summary>
+      <div class="options-grid">
+        <label>Пунктуация и регистр
+          <select id="opt-punctuation">
+            <option value="auto">как решит модель</option>
+            <option value="on">включить</option>
+            <option value="off">выключить</option>
+          </select>
+        </label>
+        <label>Числа цифрами
+          <select id="opt-itn">
+            <option value="auto">как решит модель</option>
+            <option value="on">включить</option>
+            <option value="off">выключить</option>
+          </select>
+        </label>
+        <label>Пропуск тишины (VAD)
+          <select id="opt-vad">
+            <option value="false">выключен</option>
+            <option value="true">включён</option>
+          </select>
+        </label>
+        <label>Одновременных распознаваний
+          <select id="opt-pool">
+            <option value="1">1 — минимальная задержка</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+          </select>
+        </label>
+      </div>
+    </details>
+  </section>
+
+  <section class="module" id="section-test">
+    <div class="module-head"><span class="mono eyebrow">Проверка</span></div>
+    <p class="detail">Надиктуйте фразу или перетащите файл — увидите текст и время на этом сервере.</p>
+
+    <div class="test-row">
+      <button id="btn-record" class="btn btn-primary" type="button">Записать с микрофона</button>
+      <label class="btn btn-quiet" for="file-input">Выбрать файл</label>
+      <input id="file-input" type="file" accept="audio/*" hidden>
+      <canvas id="meter" class="hidden" width="480" height="40" aria-hidden="true"></canvas>
+    </div>
+
+    <div id="drop" class="drop">…или перетащите сюда аудиофайл</div>
+
+    <div id="result" class="result hidden">
+      <p id="result-text" class="result-text"></p>
+      <div class="latency">
+        <div class="latency-bars">
+          <div class="latency-bar audio"><span id="bar-audio"></span><b class="mono">запись <em id="val-audio">—</em></b></div>
+          <div class="latency-bar work"><span id="bar-work"></span><b class="mono">распознавание <em id="val-work">—</em></b></div>
+        </div>
+        <p id="latency-verdict" class="mono verdict"></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="module" id="section-glossary">
+    <div class="module-head">
+      <span class="mono eyebrow">Глоссарий</span>
+      <span id="glossary-count" class="mono badge">фраз нет</span>
+    </div>
+    <p class="detail">Имена, термины и названия, которые движок должен узнавать. Фразу добавляет Enter, вес подсказки — после вертикальной черты: <code>АйМоп|8</code>. Список применяется на этапе распознавания, а не правкой готового текста.</p>
+    <div id="tags" class="tags">
+      <span id="tag-list" class="tag-list"></span>
+      <span class="tag-entry">
+        <input id="add-phrase" class="tag-input" type="text" spellcheck="false"
+               autocomplete="off" placeholder="Добавить фразу…"
+               aria-label="Добавить фразу в глоссарий">
+        <button id="btn-add" class="tag-add" type="button" title="Добавить" aria-label="Добавить">+</button>
+      </span>
+    </div>
+    <p id="glossary-reach" class="mono reach-line"></p>
+    <p id="dropped-hint" class="detail"></p>
+
+    <div class="test-row">
+      <button id="btn-glossary" class="btn btn-primary" type="button">Применить</button>
+      <label class="btn btn-quiet" for="glossary-file">Импорт</label>
+      <input id="glossary-file" type="file" accept=".txt,.csv,text/plain,text/csv" hidden>
+      <button id="btn-export" class="btn btn-quiet" type="button">Экспорт</button>
+      <span id="glossary-hint" class="mono dim"></span>
+    </div>
+  </section>
+
+  <section class="module" id="section-connect">
+    <div class="module-head"><span class="mono eyebrow">Подключение</span></div>
+    <p class="detail">API совместим с OpenAI. Поле <code>prompt</code> движок принимает, но игнорирует — контекст задаётся глоссарием выше.</p>
+    <div class="snippet">
+      <div class="snippet-head"><span class="mono">curl</span><button class="btn btn-quiet copy" data-target="snip-curl" type="button">Скопировать</button></div>
+      <pre id="snip-curl"></pre>
+    </div>
+    <div class="snippet">
+      <div class="snippet-head"><span class="mono">Python, openai SDK</span><button class="btn btn-quiet copy" data-target="snip-py" type="button">Скопировать</button></div>
+      <pre id="snip-py"></pre>
+    </div>
+  </section>
+
+  <section class="module" id="section-logs">
+    <div class="module-head">
+      <span class="mono eyebrow">Логи</span>
+      <label class="mono toggle"><input id="log-follow" type="checkbox" checked> следить</label>
+    </div>
+    <pre id="logs" class="logs"></pre>
+  </section>
+
+  <footer class="foot mono">
+    <span>движок <a href="https://github.com/ekhodzitsky/gigastt" target="_blank" rel="noreferrer">gigastt</a> · модель <a href="https://github.com/salute-developers/GigaAM" target="_blank" rel="noreferrer">GigaAM v3</a></span>
+  </footer>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

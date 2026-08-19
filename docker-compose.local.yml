@@ -1,0 +1,18 @@
+# Наложение для разработки на своей машине. Запуск:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml down
+#
+# Отличий от боевого ровно три, и все — про то, чтобы ноутбук не превращался в
+# сервер: контейнер не поднимается сам после перезагрузки, имя другое (чтобы
+# случайно не спутать с боевым в чужом `docker ps`), и значения читаются ещё и из
+# `.env.local`, который перебивает `.env`.
+services:
+  stt-api:
+    container_name: stt-api-local
+    restart: "no"
+    env_file:
+      - path: .env
+        required: false
+      - path: .env.local
+        required: false
