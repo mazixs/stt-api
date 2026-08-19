@@ -9,10 +9,12 @@ import asyncio
 import json
 import time
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .auth import require_api_key
@@ -271,6 +273,35 @@ async def test_transcription(request: Request) -> JSONResponse:
             "rtf": round(elapsed / audio_seconds, 3) if audio_seconds else None,
         }
     )
+
+
+@admin.get("/docs", include_in_schema=False)
+async def swagger_ui(request: Request) -> HTMLResponse:
+    """Swagger UI под тем же ключом, что и остальной `/api`.
+
+    Схема описывает управляющие эндпоинты вместе с их телами запросов, поэтому она
+    закрывается ровно тогда, когда закрыт сам сервис: пустой `API_KEY` — открыто,
+    заданный — нужен ключ. Отдельного переключателя для документации нет намеренно,
+    иначе владелец сервиса решал бы один вопрос дважды.
+
+    Ключ принимается ещё и как `?api_key=`, как на SSE: браузер не умеет послать
+    заголовок при переходе по ссылке. Пришедший так ключ страница подставляет в ссылку
+    на схему — иначе Swagger получил бы 401 на первом же запросе к `/api/openapi.json`.
+    """
+    presented = request.query_params.get("api_key", "")
+    openapi_url = "/api/openapi.json"
+    if presented:
+        openapi_url += f"?api_key={quote(presented, safe='')}"
+    return get_swagger_ui_html(
+        openapi_url=openapi_url,
+        title="GigaAM STT Console — API",
+        oauth2_redirect_url=None,
+    )
+
+
+@admin.get("/openapi.json", include_in_schema=False)
+async def openapi_schema(request: Request) -> JSONResponse:
+    return JSONResponse(request.app.openapi())
 
 
 def _engine_error(response: httpx.Response) -> dict[str, Any]:

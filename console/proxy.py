@@ -199,7 +199,13 @@ async def models(request: Request) -> dict[str, Any]:
     return {"object": "list", "data": data}
 
 
-@router.api_route("/v1/{path:path}", methods=["GET", "POST", "DELETE"])
+# `include_in_schema=False`: одна запись с подстановкой `{path}` ничего не сообщает
+# читателю схемы, а три метода на одном маршруте дают FastAPI повторяющийся
+# operation id и предупреждение при каждой сборке схемы. Родные эндпоинты движка
+# описаны в README, документация у них своя — апстримная.
+@router.api_route(
+    "/v1/{path:path}", methods=["GET", "POST", "DELETE"], include_in_schema=False
+)
 async def passthrough(request: Request, path: str) -> StreamingResponse:
     """Everything else the engine exposes (native /v1/transcribe, /v1/jobs, ...)."""
     require_ready(request)

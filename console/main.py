@@ -50,9 +50,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         title="GigaAM STT Console",
         summary="Веб-консоль и OpenAI-совместимый API поверх движка GigaSTT",
         lifespan=lifespan,
-        docs_url="/api/docs",
+        # Штатные маршруты документации выключены: свои, на `/api/docs` и
+        # `/api/openapi.json`, живут в `console.api` под проверкой ключа — схема
+        # закрывается вместе с сервисом, а не остаётся открытой сама по себе.
+        docs_url=None,
         redoc_url=None,
-        openapi_url="/api/openapi.json",
+        openapi_url=None,
     )
     app.state.settings = settings
     app.state.bus = bus
