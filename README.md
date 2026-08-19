@@ -346,6 +346,10 @@ docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
 docker compose -f docker-compose.yml -f docker-compose.local.yml down    # не забыть
 ```
 
+Версии помечены тегами `vX.Y.Z`, а что в них вошло — в
+[CHANGELOG.md](CHANGELOG.md). Номер лежит в `console/__init__.py`: оттуда его берут и
+`pyproject.toml`, и схема на `/api/openapi.json`, так что расходиться им негде.
+
 Ручной сценарий проверки на живом движке — [`docs/manual-smoke.md`](docs/manual-smoke.md).
 Остальные документы — [`docs/`](docs/): [о продукте](docs/product.md),
 [технические решения](docs/decisions.md),

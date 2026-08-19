@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import proxy
+from . import __version__, proxy
 from .api import router as api_router
 from .errors import ApiError, api_error_handler
 from .events import EventBus
@@ -49,6 +49,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title="GigaAM STT Console",
         summary="Веб-консоль и OpenAI-совместимый API поверх движка GigaSTT",
+        version=__version__,
         lifespan=lifespan,
         # Штатные маршруты документации выключены: свои, на `/api/docs` и
         # `/api/openapi.json`, живут в `console.api` под проверкой ключа — схема

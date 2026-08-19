@@ -1,6 +1,6 @@
 [project]
 name = "stt-api-console"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Web console and OpenAI-compatible facade for the GigaSTT (GigaAM v3) speech recognition engine"
 license = "Apache-2.0"
 requires-python = ">=3.12"
@@ -20,6 +20,9 @@ dev = [
 
 [tool.setuptools]
 packages = ["console"]
+
+[tool.setuptools.dynamic]
+version = { attr = "console.__version__" }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

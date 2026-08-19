@@ -213,3 +213,11 @@ async def test_deploy_progress_visible_in_status(client_stopped, monkeypatch):
         await _sleep(0.1)
     assert any(value is not None for value in seen)
     await wait_status(client_stopped, "ready", timeout=60)
+
+
+async def test_schema_reports_the_package_version(client_ready):
+    """Схема обязана называть ту же версию, что и пакет: расхождение — это баг."""
+    import console
+
+    schema = (await client_ready.get("/api/openapi.json")).json()
+    assert schema["info"]["version"] == console.__version__
