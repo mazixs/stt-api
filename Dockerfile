@@ -3,6 +3,8 @@
 # The speech engine is not built here: we take the upstream binary from its published
 # image. The runtime base must stay debian:trixie-slim — that is what upstream builds
 # against, and the binary's onnxruntime statics need trixie's libstdc++.
+# Версия движка. Такое же значение стоит в `docker-compose.yml`, и меняются они одним
+# коммитом: здесь — запас для прямого `docker build`, там — то, что берёт compose.
 ARG GIGASTT_TAG=2.18.0
 FROM ghcr.io/ekhodzitsky/gigastt:${GIGASTT_TAG} AS engine
 
