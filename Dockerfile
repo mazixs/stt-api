@@ -5,7 +5,7 @@
 # against, and the binary's onnxruntime statics need trixie's libstdc++.
 # Версия движка. Такое же значение стоит в `docker-compose.yml`, и меняются они одним
 # коммитом: здесь — запас для прямого `docker build`, там — то, что берёт compose.
-ARG GIGASTT_TAG=2.18.0
+ARG GIGASTT_TAG=2.19.0
 FROM ghcr.io/ekhodzitsky/gigastt:${GIGASTT_TAG} AS engine
 
 FROM debian:trixie-slim

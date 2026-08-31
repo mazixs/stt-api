@@ -5,7 +5,7 @@ services:
       args:
         # Закреплённая версия движка. Второй раз она встречается только в Dockerfile
         # (запас для прямого `docker build`) и меняется тем же коммитом.
-        GIGASTT_TAG: ${GIGASTT_TAG:-2.18.0}
+        GIGASTT_TAG: ${GIGASTT_TAG:-2.19.0}
     image: stt-api-console:latest
     container_name: stt-api
     # Docker's init reaps the engine process if the console ever dies unexpectedly.

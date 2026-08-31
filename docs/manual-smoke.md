@@ -22,7 +22,7 @@ curl -s localhost:8091/health
 
 ```sh
 docker compose run --rm --entrypoint /usr/local/bin/gigastt stt-api --version
-# gigastt 2.18.0
+# gigastt <версия из GIGASTT_TAG в docker-compose.yml>
 ```
 
 ## 2. Развёртывание модели
@@ -72,21 +72,31 @@ curl -sN -X POST localhost:8091/v1/audio/transcriptions -F file=@example.wav -F 
 curl -s localhost:8091/v1/models | python3 -m json.tool
 ```
 
+В потоке на файловой загрузке до события `transcript.text.done` доходят одна-две
+дельты — так и должно быть: движок получил весь звук сразу. Смотреть надо на текст в
+`done`, он должен совпадать с обычной загрузкой (на движке до 2.19.0 расходился, см.
+[замер](research/head-choice-and-wer.md)).
+
 Отдельно — браузерный WebM/Opus, на котором до движка 2.17.0 падал OpenWhispr:
-60-мс пакеты и сам контейнер отвергались с 422. Обе команды должны вернуть 200,
-причём первая идёт напрямую в движок, минуя консоль:
+60-мс пакеты и сам контейнер отвергались с 422. **Смотрите текст, а не код ответа:**
+движок отдаёт 200 и пустую строку, если в контейнере объявлена частота не 48 кГц
+(см. [открытые вопросы](open-questions.md)), поэтому проверка по `%{http_code}` такую
+тишину пропускает. Речь берём из настоящей записи, а не из синуса:
 
 ```sh
-ffmpeg -f lavfi -i "sine=frequency=440:duration=3" -ac 2 -c:a libopus \
-  -frame_duration 60 -f webm sine60.webm
+ffmpeg -y -i example.wav -ar 48000 -c:a libopus -frame_duration 60 -f webm speech.webm
 
-docker compose cp sine60.webm stt-api:/tmp/sine60.webm
-docker compose exec stt-api curl -s -o /dev/null -w "%{http_code}\n" \
-  -X POST 127.0.0.1:9876/v1/audio/transcriptions -F file=@/tmp/sine60.webm
+# через консоль: ожидается тот же текст, что и на example.wav
+curl -s -X POST localhost:8091/api/test -F file=@speech.webm
 
-curl -s -o /dev/null -w "%{http_code}\n" -X POST localhost:8091/v1/audio/transcriptions \
-  -F model=whisper-1 -F file=@sine60.webm
+# и напрямую в движок, минуя консоль
+docker compose cp speech.webm stt-api:/tmp/speech.webm
+docker compose exec stt-api curl -s -X POST 127.0.0.1:9876/v1/audio/transcriptions \
+  -F file=@/tmp/speech.webm
 ```
+
+Пустой `text` при коде 200 — это ошибка, а не тишина в записи: переложите тот же
+поток Opus в OGG (`ffmpeg -i speech.webm -c:a copy speech.ogg`) и сравните.
 
 Консоль такие загрузки не переписывает — она только читает их длину, чтобы посчитать
 RTF (`console/webminfo.py`), потому что в ответе формата `json` длительности нет.
