@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     hotwords_default: bool = False
 
     autostart: bool = True
-    max_upload_mb: int = Field(default=50, ge=1)
+    max_upload_mb: int = Field(default=150, ge=1)
     enable_jobs: bool = False
     hf_token: str = ""
     log_level: str = "info"

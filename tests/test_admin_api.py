@@ -43,7 +43,7 @@ async def test_status_shape_when_stopped(client_stopped):
     assert body["api_key_set"] is False
     assert body["glossary_count"] == 0
     assert body["defaults"]["variant"] == "rnnt"
-    assert body["max_upload_mb"] == 50
+    assert body["max_upload_mb"] == 150
 
 
 async def test_status_shape_when_ready(client_ready):
