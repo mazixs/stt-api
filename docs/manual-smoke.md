@@ -101,6 +101,27 @@ docker compose exec stt-api curl -s -X POST 127.0.0.1:9876/v1/audio/transcriptio
 Консоль такие загрузки не переписывает — она только читает их длину, чтобы посчитать
 RTF (`console/webminfo.py`), потому что в ответе формата `json` длительности нет.
 
+## 3.5. Лимит размера
+
+Файл ровно в `MAX_UPLOAD_MB` должен распознаваться, а файл больше — получать `413` от
+консоли с текстом про размер. Ответ `400 Invalid multipart body` означает, что движку
+не передали предел тела (см. [решения](decisions.md)):
+
+```sh
+python3 -c "
+import struct, pathlib
+n = (50*1024*1024 - 44) // 2
+d = bytes(n*2)
+h = b'RIFF' + struct.pack('<I', 36+len(d)) + b'WAVEfmt ' + struct.pack('<IHHIIHH',16,1,1,16000,32000,2,16) + b'data' + struct.pack('<I', len(d))
+pathlib.Path('limit.wav').write_bytes(h+d)"
+
+curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8091/v1/audio/transcriptions \
+  -F model=whisper-1 -F file=@limit.wav                      # ожидается 200
+
+docker compose exec stt-api sh -c 'ps -eo args | grep "[g]igastt serve"' \
+  | tr ' ' '\n' | grep -A1 body-limit                        # ожидается 53477376
+```
+
 ## 4. Глоссарий без перезапуска
 
 ```sh

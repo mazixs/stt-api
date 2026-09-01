@@ -49,6 +49,12 @@ def build_argv(settings: Settings, cfg: EngineConfig) -> list[str]:
         # Side models default to the engine user's home directory, which is not a
         # volume: without these two flags the punctuation and VAD models would be
         # re-downloaded on every container recreate.
+        # Предел тела у движка свой, и по умолчанию он равен нашему — из-за чего
+        # файл ровно в `MAX_UPLOAD_MB` не проходил: обёртка multipart добавляет
+        # к нему несколько сотен байт. Считаем его от нашего лимита, чтобы
+        # отказывала консоль понятным текстом, а не движок словами про multipart.
+        "--body-limit-bytes",
+        str(settings.engine_body_limit_bytes),
         "--punct-model-dir",
         str(settings.model_dir / "punct"),
         "--vad-model-dir",

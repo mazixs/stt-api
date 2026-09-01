@@ -36,6 +36,11 @@ def test_argv_maps_config_to_engine_flags(console_settings):
     assert argv[argv.index("--port") + 1] == str(console_settings.engine_port)
     assert argv[argv.index("--model-dir") + 1] == str(console_settings.model_dir)
     assert argv[argv.index("--hotwords-file") + 1] == str(console_settings.hotwords_path)
+    # The engine's own body limit must sit above ours, or a file that just fits
+    # MAX_UPLOAD_MB dies inside the engine's multipart parser instead of being
+    # refused by the console with a message about size.
+    limit = int(argv[argv.index("--body-limit-bytes") + 1])
+    assert limit > console_settings.max_upload_bytes
     # Side models must live in the mounted volume, not in the engine user's home.
     assert argv[argv.index("--punct-model-dir") + 1] == str(console_settings.model_dir / "punct")
     assert argv[argv.index("--vad-model-dir") + 1] == str(console_settings.model_dir / "vad")
@@ -120,3 +125,16 @@ async def test_reload_calls_engine_admin_endpoint(console_settings):
     await proc.wait_healthy(timeout=20)
     assert await proc.reload() is True
     await proc.stop()
+
+
+def test_body_limit_follows_max_upload(console_settings):
+    """Лимит движка считается от нашего, а не остаётся значением по умолчанию."""
+    small = console_settings.model_copy(update={"max_upload_mb": 5})
+    big = console_settings.model_copy(update={"max_upload_mb": 500})
+    for settings in (small, big):
+        argv = build_argv(settings, EngineConfig())
+        limit = int(argv[argv.index("--body-limit-bytes") + 1])
+        assert limit == settings.max_upload_bytes + 1024 * 1024
+        # 500 МБ — это выше собственных 50 МиБ движка: без флага такая настройка
+        # молча не работала, хотя README предлагает её поднимать.
+        assert limit > 50 * 1024 * 1024 or settings.max_upload_mb < 50
