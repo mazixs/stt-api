@@ -178,3 +178,55 @@ async def test_shutdown_does_not_trigger_watchdog(supervisor):
     await supervisor.deploy(cfg())
     await supervisor.shutdown()
     assert supervisor.restart_count == 0
+
+
+def env_settings(console_settings, **overrides):
+    """Settings, где явно заданы только `overrides`: остальное - умолчания."""
+    return console_settings.__class__(
+        _env_file=None,
+        engine_bin=console_settings.engine_bin,
+        engine_port=console_settings.engine_port,
+        model_dir=console_settings.model_dir,
+        data_dir=console_settings.data_dir,
+        **overrides,
+    )
+
+
+async def test_env_divergence_lists_explicit_fields_that_differ(console_settings, bus):
+    settings = env_settings(console_settings, hotwords_default=True)
+    supervisor = Supervisor(settings, bus)
+    supervisor._desired = EngineConfig(hotwords_default=False)
+    assert supervisor.env_divergence() == {"hotwords_default": {"env": True, "state": False}}
+
+
+async def test_env_divergence_is_empty_when_nothing_is_explicit(console_settings, bus):
+    supervisor = Supervisor(console_settings, bus)
+    supervisor._desired = EngineConfig(pool_size=4)
+    assert supervisor.env_divergence() == {}
+
+
+async def test_env_divergence_stays_quiet_when_values_agree(console_settings, bus):
+    settings = env_settings(console_settings, pool_size=4)
+    supervisor = Supervisor(settings, bus)
+    supervisor._desired = EngineConfig(pool_size=4)
+    assert supervisor.env_divergence() == {}
+
+
+async def test_initial_context_missing_ignores_case_and_yo(console_settings, bus):
+    from console.glossary import write_hotwords
+
+    console_settings.initial_context = "Пётр, GigaAM, новая"
+    write_hotwords(console_settings.hotwords_path, "петр, gigaam")
+    supervisor = Supervisor(console_settings, bus)
+    assert supervisor.initial_context_missing() == ["новая"]
+
+
+async def test_boot_warns_about_divergence_in_the_log(console_settings, bus):
+    """Молчаливое расхождение - это и был дефект: .env говорил одно, разворачивалось
+    другое, и узнать об этом было негде."""
+    settings = env_settings(console_settings, hotwords_default=True, autostart=False)
+    supervisor = Supervisor(settings, bus)
+    supervisor._desired = EngineConfig(hotwords_default=False)
+    await supervisor.restore_on_boot()
+    assert any("ВНИМАНИЕ" in line and "hotwords_default" in line for line in bus.log_lines())
+    await supervisor.shutdown()

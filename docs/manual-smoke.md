@@ -158,6 +158,42 @@ curl -s localhost:8091/api/status | python3 -c "import json,sys; d=json.load(sys
 Ожидается `ready rnnt` — конфигурация поднялась из `data/state.json`, веса
 повторно не качались.
 
+### 6.1. Расхождение с `.env` видно, а не молчит
+
+Правило "состояние сильнее `.env`" остается, поэтому проверяется не то, что файл
+победил, а то, что о разнице сказано вслух. Поменяйте в `.env` одну строку
+(например `HOTWORDS_DEFAULT` на противоположное значение) и пересоздайте контейнер:
+
+```sh
+docker compose up -d
+sleep 8
+docker compose logs stt-api | grep ВНИМАНИЕ
+curl -s localhost:8091/api/status | python3 -m json.tool | sed -n '/"env"/,/}/p'
+```
+
+Ожидается строка `ВНИМАНИЕ: .env расходится с сохраненной конфигурацией
+(hotwords_default: .env=... / развернуто=...)` и непустое `env.diverges` в статусе.
+В консоли это же видно блоком "в .env указано другое" в разделе "Настройки запуска".
+
+Дальше применяется `.env` - в консоли кнопкой "Развернуть с настройками .env", в
+терминале тем же вызовом, который делает кнопка:
+
+```sh
+curl -s -X POST localhost:8091/api/deploy -H 'content-type: application/json' \
+  -d "$(curl -s localhost:8091/api/status | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["env"]["config"]))')"
+sleep 20
+ps -eo args | grep "[g]igastt serve"
+curl -s localhost:8091/api/status | python3 -c "import json,sys; print(json.load(sys.stdin)['env']['diverges'])"
+```
+
+Ожидается, что флаг дошел до процесса (`--hotwords-default` есть или его нет,
+следовательно как просит файл), а `env.diverges` стал пустым. Смотреть надо
+`ps -eo args`, а не эндпоинт статуса: статус показывает желаемое, а не argv.
+
+Фразы `INITIAL_CONTEXT`, которых нет в глоссарии, показываются там же, в разделе
+"Глоссарий", вместе с кнопкой "Добавить из `.env`". Автоматически они не доливаются
+намеренно: удаленная в консоли фраза не должна возвращаться после перезапуска.
+
 ## 7. Побочные модели лежат в томе
 
 ```sh

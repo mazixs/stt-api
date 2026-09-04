@@ -27,6 +27,11 @@ MAX_CONSECUTIVE_FAILURES = 5
 FAILED_RETRY_DELAY = 60.0
 
 
+def _fold(phrase: str) -> str:
+    """Как движок сравнивает фразы глоссария: без регистра и с единой "е"."""
+    return phrase.casefold().replace("ё", "е")
+
+
 class Supervisor:
     def __init__(self, settings: Settings, bus: EventBus) -> None:
         self.settings = settings
@@ -91,6 +96,42 @@ class Supervisor:
             hotwords_boost=self.settings.hotwords_boost,
             hotwords_default=self.settings.hotwords_default,
         )
+
+    def env_config(self) -> EngineConfig:
+        """То, что просит `.env`, без оглядки на сохраненное состояние."""
+        return self.settings.engine_config_from_env()
+
+    def env_divergence(self) -> dict[str, dict[str, Any]]:
+        """Явно заданные в .env значения, которые расходятся с тем, что развернется.
+
+        Состояние сильнее `.env` намеренно: иначе выбранная в консоли голова
+        откатывалась бы к значению из файла после каждого перезапуска контейнера, а это
+        худшая из гонок. Поэтому расхождение не исправляется само - оно показывается, а
+        исправляет его пользователь одной кнопкой.
+        """
+        env = self.env_config().to_dict()
+        state = self.default_config().to_dict()
+        return {
+            name: {"env": env[name], "state": state[name]}
+            for name in sorted(self.settings.explicit_engine_fields())
+            if env[name] != state[name]
+        }
+
+    def initial_context_missing(self) -> list[str]:
+        """Фразы INITIAL_CONTEXT, которых нет в глоссарии, - сравнение как у движка.
+
+        Автоматического слияния нет намеренно: фраза, удаленная в интерфейсе, не должна
+        возвращаться после перезапуска только потому, что осталась в `.env`.
+        """
+        present = {
+            _fold(phrase)
+            for phrase, _weight in parse_context(read_glossary(self.settings.hotwords_path))
+        }
+        return [
+            phrase
+            for phrase, _weight in parse_context(self.settings.initial_context)
+            if _fold(phrase) not in present
+        ]
 
     async def health(self) -> dict[str, Any] | None:
         return await self.process.health()
@@ -245,6 +286,7 @@ class Supervisor:
     # ------------------------------------------------------------------ lifecycle
 
     async def restore_on_boot(self) -> None:
+        self._warn_about_env_divergence()
         if not self.settings.autostart:
             self._set_status("stopped", "Автозапуск отключён (AUTOSTART=0)")
             return
@@ -254,6 +296,25 @@ class Supervisor:
             return
         self.bus.publish_log(f"restoring last deployment: {target.variant}")
         await self.deploy(target)
+
+    def _warn_about_env_divergence(self) -> None:
+        """Сказать в лог, что `.env` просит одно, а разворачивается другое.
+
+        Уровня "предупреждение" у шины событий нет, поэтому строка помечается словом:
+        молчаливое расхождение и было дефектом - `HOTWORDS_DEFAULT=1` не доходил до
+        движка, и узнать об этом было негде.
+        """
+        diverging = self.env_divergence()
+        if not diverging:
+            return
+        listed = ", ".join(
+            f"{name}: .env={values['env']} / развернуто={values['state']}"
+            for name, values in diverging.items()
+        )
+        self.bus.publish_log(
+            f"ВНИМАНИЕ: .env расходится с сохраненной конфигурацией ({listed}); "
+            "разворачивается сохраненная - примените .env кнопкой в консоли"
+        )
 
     async def stop_engine(self) -> None:
         async with self._lock:

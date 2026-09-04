@@ -86,6 +86,58 @@ function renderStatus(status) {
   renderRecent(metrics);
 
   if (status.defaults) applyDefaults(status.defaults);
+  renderEnvDiff(status.env);
+}
+
+/* Состояние сильнее .env намеренно: иначе выбранная здесь голова откатывалась бы к
+   значению из файла после каждого перезапуска контейнера. Поэтому расхождение не
+   сливается само, а показывается - и применяется одной кнопкой. */
+
+const FIELD_WORDS = {
+  variant: "голова", punctuation: "пунктуация", itn: "числа цифрами", vad: "пропуск тишины",
+  pool_size: "одновременных распознаваний", hotwords_boost: "сила подсказки",
+  hotwords_default: "словарь брендов",
+};
+const humanValue = (v) => (v === true ? "включен" : v === false ? "выключен" : String(v));
+
+function renderEnvDiff(env) {
+  const box = $("env-diff");
+  const diverges = (env && env.diverges) || {};
+  const names = Object.keys(diverges);
+  box.classList.toggle("hidden", !names.length);
+  if (!names.length) return;
+  const list = $("env-diff-list");
+  list.textContent = "";
+  names.forEach((name) => {
+    const li = document.createElement("li");
+    li.className = "mono";
+    li.textContent = (FIELD_WORDS[name] || name) + ": в .env " + humanValue(diverges[name].env) +
+      ", развёрнуто " + humanValue(diverges[name].state);
+    list.appendChild(li);
+  });
+  $("btn-deploy-env").disabled = state.busy;
+}
+
+async function deployFromEnv() {
+  const env = state.status && state.status.env && state.status.env.config;
+  if (!env) return;
+  // Форма перезаполняется значениями .env, дальше обычный путь развёртывания.
+  $("opt-punctuation").value = env.punctuation;
+  $("opt-itn").value = env.itn;
+  $("opt-vad").value = String(env.vad);
+  setSelectValue($("opt-pool"), String(env.pool_size));
+  $("opt-hotwords-default").value = String(env.hotwords_default);
+  $("opt-boost").value = String(env.hotwords_boost);
+  await deploy(env.variant);
+}
+
+/* POOL_SIZE в .env допускает до 8, а в разметке перечислены 1-4: значение, которого
+   в списке нет, пришлось бы молча проигнорировать. */
+function setSelectValue(select, value) {
+  if (![...select.options].some((option) => option.value === value)) {
+    select.add(new Option(value, value));
+  }
+  select.value = value;
 }
 
 /* Последние файлы: по ним видно не «в среднем хорошо», а что именно тормозило.
@@ -151,7 +203,7 @@ function applyDefaults(defaults) {
   $("opt-punctuation").value = defaults.punctuation;
   $("opt-itn").value = defaults.itn;
   $("opt-vad").value = String(defaults.vad);
-  $("opt-pool").value = String(defaults.pool_size);
+  setSelectValue($("opt-pool"), String(defaults.pool_size));
   $("opt-hotwords-default").value = String(defaults.hotwords_default);
   $("opt-boost").value = String(defaults.hotwords_boost);
 }
@@ -262,7 +314,7 @@ async function stopEngine() {
    ту, что словарь развёрнутой головы написать не может, движок молча выбросит, и она
    показана зачёркнутой. Отдельного списка отброшенных больше нет — он и есть список. */
 
-const glossary = { entries: [], applied: "", dropped: new Set() };
+const glossary = { entries: [], applied: "", dropped: new Set(), envMissing: [] };
 
 const fold = (phrase) => phrase.toLowerCase().replace(/ё/g, "е");
 
@@ -306,6 +358,25 @@ function renderGlossary(payload) {
   $("glossary-count").textContent = phraseCount(glossary.entries.length);
   $("btn-glossary").disabled = glossaryText() === glossary.applied;
   renderReach(payload);
+  renderEnvMissing(payload);
+}
+
+/* INITIAL_CONTEXT читается один раз, при создании файла глоссария, — дальше правки в
+   консоли сильнее. Автоматически доливать фразы из .env нельзя: удалённая здесь фраза
+   не должна возвращаться после перезапуска. Поэтому список показывается, а решает
+   пользователь. Ответ сервера кэшируется: правка списка перерисовывает чипы без
+   payload, и подсказка иначе исчезала бы до следующей загрузки. */
+
+function renderEnvMissing(payload) {
+  if (payload && payload.env_missing) glossary.envMissing = payload.env_missing;
+  const missing = (glossary.envMissing || []).filter(
+    (phrase) => !glossary.entries.some((entry) => fold(entry.phrase) === fold(phrase)));
+  $("glossary-env").classList.toggle("hidden", !missing.length);
+  if (!missing.length) return;
+  $("glossary-env-text").textContent = "В .env (INITIAL_CONTEXT) есть " +
+    plural(missing.length, "фраза", "фразы", "фраз") + ", которых нет в списке: " +
+    missing.join(", ") + ".";
+  $("btn-glossary-env").onclick = () => addPhrases(missing.join("\n"));
 }
 
 function tagChip(entry, index) {
@@ -822,6 +893,7 @@ function init() {
       event.target.value = "";
     }
   });
+  $("btn-deploy-env").addEventListener("click", deployFromEnv);
   $("btn-export").addEventListener("click", exportGlossary);
   $("glossary-file").addEventListener("change", (event) => {
     const file = event.target.files[0];

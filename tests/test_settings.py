@@ -49,3 +49,21 @@ def test_initial_context_and_hotwords_knobs(monkeypatch):
     assert s.initial_context == "АйМоп, GigaAM"
     assert s.hotwords_boost == 7.5
     assert s.hotwords_default is True
+
+
+def test_explicit_engine_fields_names_only_what_was_set(monkeypatch):
+    """Расхождение с state.json имеет смысл показывать только по тем полям, которые
+    пользователь задал сам: про значение по умолчанию никто ничего не просил."""
+    monkeypatch.setenv("HOTWORDS_DEFAULT", "1")
+    monkeypatch.setenv("MODEL_VARIANT", "e2e_rnnt")
+    s = Settings(_env_file=None)
+    assert s.explicit_engine_fields() == {"hotwords_default", "variant"}
+    cfg = s.engine_config_from_env()
+    assert cfg.variant == "e2e_rnnt" and cfg.hotwords_default is True and cfg.pool_size == 1
+
+
+def test_engine_config_from_env_ignores_console_only_knobs():
+    """Порт и ключ - не аргументы движка, и в расхождении им делать нечего."""
+    s = Settings(_env_file=None, console_port=9999, api_key="x")
+    assert s.explicit_engine_fields() == set()
+    assert s.engine_config_from_env() == Settings(_env_file=None).engine_config_from_env()

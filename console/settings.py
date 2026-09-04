@@ -5,10 +5,13 @@ Engine-specific flags are derived from these values in `console.engine`.
 """
 
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, ClassVar, Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+if TYPE_CHECKING:
+    from .state import EngineConfig
 
 HeadId = Literal["rnnt", "e2e_rnnt", "ml_ctc", "ml_ctc_large"]
 Mode = Literal["auto", "on", "off"]
@@ -61,6 +64,47 @@ class Settings(BaseSettings):
     engine_port: int = 9876
     model_dir: Path = Path("/models")
     data_dir: Path = Path("/data")
+
+    # Имена полей движка в терминах `.env` и в терминах `EngineConfig`: совпадают у
+    # всех, кроме головы (MODEL_VARIANT против variant). ClassVar - чтобы pydantic не
+    # принял таблицу за настройку.
+    _ENGINE_FIELD_NAMES: ClassVar[dict[str, str]] = {
+        "model_variant": "variant",
+        "punctuation": "punctuation",
+        "itn": "itn",
+        "vad": "vad",
+        "pool_size": "pool_size",
+        "hotwords_boost": "hotwords_boost",
+        "hotwords_default": "hotwords_default",
+    }
+
+    def engine_config_from_env(self) -> "EngineConfig":
+        """Конфигурация движка, как ее описывает .env (или окружение), без state.json."""
+        from .state import EngineConfig  # локальный импорт: state не зависит от settings
+
+        return EngineConfig(
+            variant=self.model_variant,
+            punctuation=self.punctuation,
+            itn=self.itn,
+            vad=self.vad,
+            pool_size=self.pool_size,
+            hotwords_boost=self.hotwords_boost,
+            hotwords_default=self.hotwords_default,
+        )
+
+    def explicit_engine_fields(self) -> set[str]:
+        """Поля EngineConfig, которые пользователь задал явно, а не оставил по умолчанию.
+
+        Только по ним есть смысл говорить о расхождении с state.json: значение по
+        умолчанию никто не "хотел", и предупреждать о нем - шум. Строка, написанная в
+        `.env`, считается заданной явно, даже если совпадает с образцом: пользователь
+        ее там оставил, следовательно имел в виду.
+        """
+        return {
+            engine_name
+            for settings_name, engine_name in self._ENGINE_FIELD_NAMES.items()
+            if settings_name in self.model_fields_set
+        }
 
     @property
     def engine_base_url(self) -> str:

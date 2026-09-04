@@ -102,6 +102,14 @@ def _status_payload(request: Request) -> dict[str, Any]:
             "running": supervisor.process.is_running,
         },
         "defaults": supervisor.default_config().to_dict(),
+        # Состояние сильнее `.env` намеренно, поэтому расхождение между ними не
+        # исправляется само, а показывается: что просит файл, что из этого задано явно
+        # и где значения разошлись.
+        "env": {
+            "config": supervisor.env_config().to_dict(),
+            "explicit": sorted(settings.explicit_engine_fields()),
+            "diverges": supervisor.env_divergence(),
+        },
         "metrics": request.app.state.metrics.snapshot(),
         "api_key_set": bool(settings.api_key),
         "glossary_count": supervisor.glossary_count,
@@ -179,6 +187,9 @@ async def glossary_get(request: Request) -> dict[str, Any]:
         # claim phrases are being dropped when we simply do not know.
         "usable_count": len(usable) if alphabet is not None else None,
         "dropped": dropped,
+        # Фразы из INITIAL_CONTEXT, которых в списке нет: `.env` читается один раз, при
+        # создании файла, поэтому дальше расхождение видно только так.
+        "env_missing": supervisor.initial_context_missing(),
         "approximate": alphabet is not None and alphabet.subword,
         # What this head can spell, so the advice is read off the vocabulary on disk
         # instead of a rule that is wrong for some head: `e2e_rnnt` writes Latin and

@@ -229,3 +229,15 @@ async def test_status_reports_running_hotwords_settings(client_ready):
     body = (await client_ready.get("/api/status")).json()
     assert body["engine"]["hotwords_boost"] == 5.0
     assert body["engine"]["hotwords_default"] is True
+
+
+async def test_status_exposes_env_config_and_divergence(client_ready):
+    body = (await client_ready.get("/api/status")).json()
+    assert set(body["env"]) == {"config", "explicit", "diverges"}
+    assert body["env"]["config"]["variant"] in ("rnnt", "e2e_rnnt", "ml_ctc", "ml_ctc_large")
+
+
+async def test_glossary_reports_env_phrases_missing_from_the_list(client_ready):
+    client_ready.app.state.settings.initial_context = "АйМоп, Совсемновая"
+    body = (await client_ready.get("/api/glossary")).json()
+    assert "Совсемновая" in body["env_missing"]

@@ -135,3 +135,11 @@ async def test_deploy_sends_every_engine_field(client_ready):
     assert "opt-hotwords-default" in html and "opt-boost" in html
     for field in ("hotwords_default", "hotwords_boost"):
         assert field in js, f"deploy() не посылает {field}"
+
+
+async def test_ui_shows_env_divergence_and_offers_to_deploy_it(client_ready):
+    html = (await client_ready.get("/")).text
+    js = (await client_ready.get("/static/app.js")).text
+    assert "env-diff" in html and "btn-deploy-env" in html
+    assert "env.diverges" in js and "env_missing" in js
+    assert "btn-glossary-env" in html
