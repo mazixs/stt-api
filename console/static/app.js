@@ -7,7 +7,9 @@ const KEY_STORAGE = "stt_console_key";
 const state = {
   key: localStorage.getItem(KEY_STORAGE) || "",
   status: null,
-  busy: false,
+  /* Карточки голов строятся один раз и обновляются на месте: пересборка на каждое
+     событие развертывания и была тем морганием, из-за которого прогресс терялся. */
+  heads: new Map(),
   recording: null,
 };
 
@@ -66,14 +68,6 @@ function renderStatus(status) {
   $("btn-stop").classList.toggle("hidden", status.status !== "ready");
   $("key-badge").classList.toggle("hidden", !status.api_key_set);
 
-  const percent = status.download_percent;
-  const showProgress = status.status === "downloading" && percent !== null && percent !== undefined;
-  $("progress").classList.toggle("hidden", !showProgress);
-  if (showProgress) {
-    $("progress-bar").style.setProperty("--pct", percent + "%");
-    $("progress-text").textContent = percent + "%";
-  }
-
   const engine = status.engine || {};
   const metrics = status.metrics || {};
   $("ro-variant").textContent = engine.variant || "—";
@@ -87,6 +81,24 @@ function renderStatus(status) {
 
   if (status.defaults) applyDefaults(status.defaults);
   renderEnvDiff(status.env);
+  renderDeploying(status);
+  afterStatusSettles(status.status);
+}
+
+/* Занятость берется от сервера, а не от POST: `/api/deploy` отвечает 202 сразу, а
+   развертывание идет еще секунды или минуты. */
+const deployBusy = (name) => name === "downloading" || name === "starting";
+
+/* Развертывание кончилось - карточки и глоссарий перечитываются ровно один раз: голова
+   сменилась, значит сменились и «скачано», и словарь, по которому считаются отброшенные
+   фразы. Внутри развертывания перечитывать нечего, там всё ведет renderDeploying. */
+let settledStatus = null;
+function afterStatusSettles(name) {
+  const wasBusy = deployBusy(settledStatus);
+  settledStatus = name;
+  if (!wasBusy || deployBusy(name)) return;
+  loadHeads();
+  loadGlossary(true);
 }
 
 /* Состояние сильнее .env намеренно: иначе выбранная здесь голова откатывалась бы к
@@ -115,7 +127,7 @@ function renderEnvDiff(env) {
       ", развёрнуто " + humanValue(diverges[name].state);
     list.appendChild(li);
   });
-  $("btn-deploy-env").disabled = state.busy;
+  $("btn-deploy-env").disabled = deployBusy(state.status && state.status.status);
 }
 
 async function deployFromEnv() {
@@ -218,53 +230,132 @@ async function refreshStatus() {
 
 /* ------------------------------------------------------------------- модели */
 
-async function refreshHeads() {
-  let payload;
+async function loadHeads() {
   try {
-    payload = await api("/api/models");
+    renderHeads(await api("/api/models"));
   } catch (err) {
-    return;
+    /* каталог не критичен для остальной страницы */
   }
+}
+
+/* Карточка строится один раз, дальше меняются только её подписи: перестройка узлов и
+   была тем морганием, из-за которого прогресс развёртывания терялся из виду. */
+function renderHeads(payload) {
   const container = $("heads");
-  container.textContent = "";
   payload.heads.forEach((head) => {
-    const card = document.createElement("article");
-    card.className = "head";
-    card.dataset.deployed = String(head.deployed);
-
-    const title = document.createElement("h3");
-    title.textContent = head.title;
-    /* Значок - про наш собственный замер, а не про чужую таблицу, поэтому источник
-       висит подсказкой прямо на нём. */
-    if (head.badge) {
-      const badge = document.createElement("span");
-      badge.className = "head-badge";
-      badge.textContent = head.badge;
-      badge.title = head.badge_note || "";
-      title.appendChild(badge);
+    let entry = state.heads.get(head.id);
+    if (!entry) {
+      entry = buildHeadCard(head);
+      state.heads.set(head.id, entry);
+      container.appendChild(entry.card);
     }
-    const subtitle = document.createElement("p");
-    subtitle.textContent = head.subtitle;
+    entry.head = head;
+    entry.card.dataset.deployed = String(head.deployed);
+    entry.downloaded.classList.toggle("hidden", !head.downloaded);
+    entry.button.textContent = headButtonLabel(head);
+    entry.button.className = head.deployed ? "btn btn-quiet" : "btn btn-primary";
+  });
+  renderDeploying(state.status || {});
+}
 
-    const meta = document.createElement("div");
-    meta.className = "head-meta";
-    meta.appendChild(tag(head.languages.join(" · ")));
-    meta.appendChild(tag("~" + head.size_mb + " МБ"));
-    if (head.native_punctuation) meta.appendChild(tag("пунктуация в модели"));
-    if (head.downloaded) meta.appendChild(tag("скачано", true));
+const headButtonLabel = (head) => (head.deployed ? "Перезапустить" : "Развернуть");
 
-    const actions = document.createElement("div");
-    actions.className = "head-actions";
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = head.deployed ? "btn btn-quiet" : "btn btn-primary";
-    button.textContent = head.deployed ? "Перезапустить" : "Развернуть";
-    button.disabled = state.busy;
-    button.addEventListener("click", () => deploy(head.id));
-    actions.appendChild(button);
+function buildHeadCard(head) {
+  const card = document.createElement("article");
+  card.className = "head";
 
-    card.append(title, subtitle, meta, actions);
-    container.appendChild(card);
+  const title = document.createElement("h3");
+  title.textContent = head.title;
+  /* Значок - про наш собственный замер, а не про чужую таблицу, поэтому источник
+     висит подсказкой прямо на нём. */
+  if (head.badge) {
+    const badge = document.createElement("span");
+    badge.className = "head-badge";
+    badge.textContent = head.badge;
+    badge.title = head.badge_note || "";
+    title.appendChild(badge);
+  }
+  const subtitle = document.createElement("p");
+  subtitle.textContent = head.subtitle;
+
+  const meta = document.createElement("div");
+  meta.className = "head-meta";
+  meta.appendChild(tag(head.languages.join(" · ")));
+  meta.appendChild(tag("~" + head.size_mb + " МБ"));
+  if (head.native_punctuation) meta.appendChild(tag("пунктуация в модели"));
+  // Значок «скачано» создаётся всегда и прячется: иначе его появление пересобирало бы meta.
+  const downloadedTag = tag("скачано", true);
+  downloadedTag.classList.add("hidden");
+  meta.appendChild(downloadedTag);
+
+  const actions = document.createElement("div");
+  actions.className = "head-actions";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.addEventListener("click", () => deploy(head.id));
+  const progress = document.createElement("div");
+  progress.className = "head-progress hidden";
+  progress.innerHTML = '<span class="head-progress-bar"></span><span class="head-progress-text mono"></span>';
+  actions.append(button, progress);
+
+  const error = document.createElement("p");
+  error.className = "head-error mono hidden";
+
+  card.append(title, subtitle, meta, actions, error);
+  return { card, button, progress, error, downloaded: downloadedTag, head };
+}
+
+/* Фаза развёртывания живёт на карточке цели: пользователь смотрит туда, где нажал.
+   Процентов у проверки весов и сборки графа нет, поэтому полоса там бегущая. */
+
+const SLOW_START_MS = 20000;
+
+const PHASE_WORDS = {
+  downloading: (s) => (s.download_percent === null || s.download_percent === undefined)
+    ? "проверяю веса"
+    : "скачиваю " + s.download_percent + "%",
+  starting: (s) => {
+    if (/откат/i.test(s.detail || "")) return "откат на прежнюю голову";
+    return startingSince && Date.now() - startingSince > SLOW_START_MS
+      ? "собираю граф, первый запуск до 2 минут"
+      : "запускаю движок";
+  },
+};
+
+let lastTarget = null;
+let startingSince = 0;
+// Жалоба держится на карточке до следующей попытки: сервер уже через секунду отвечает
+// «готово» или «остановлено», и без этого текст ошибки исчезал бы раньше, чем прочтут.
+let cardError = null;
+
+function renderDeploying(status) {
+  const active = deployBusy(status.status);
+  const target = active ? status.deploying || null : null;
+  if (status.status !== "starting" || target !== lastTarget) startingSince = 0;
+  if (status.status === "starting" && !startingSince) startingSince = Date.now();
+  if (active) {
+    lastTarget = target;
+    cardError = null;
+  } else if (status.status === "error" && lastTarget) {
+    cardError = { id: lastTarget, text: status.detail || "не удалось развернуть" };
+  }
+
+  state.heads.forEach((entry, id) => {
+    const isTarget = active && id === target;
+    const failed = cardError !== null && cardError.id === id;
+    entry.button.classList.toggle("hidden", isTarget);
+    entry.button.disabled = active;
+    entry.button.textContent = failed ? "Повторить" : headButtonLabel(entry.head);
+    entry.progress.classList.toggle("hidden", !isTarget);
+    entry.error.classList.toggle("hidden", !failed);
+    if (failed) entry.error.textContent = cardError.text;
+    if (!isTarget) return;
+    const percent = status.status === "downloading" ? status.download_percent : null;
+    const unknown = percent === null || percent === undefined;
+    entry.progress.dataset.indeterminate = String(unknown);
+    entry.progress.style.setProperty("--pct", (unknown ? 0 : percent) + "%");
+    entry.progress.querySelector(".head-progress-text").textContent = PHASE_WORDS[status.status](status);
+    entry.progress.title = status.detail || "";
   });
 }
 
@@ -276,8 +367,9 @@ function tag(text, on) {
 }
 
 async function deploy(variant) {
-  state.busy = true;
-  await refreshHeads();
+  // Карточка отвечает до первого события с сервера: между нажатием и SSE проходит
+  // заметная доля секунды, и молчание в этот момент читается как «кнопка не сработала».
+  renderDeploying({ status: "downloading", deploying: variant, download_percent: null, detail: "" });
   // Пустое или нечисловое поле силы подсказки — не ноль: Number("") дал бы 0, то есть
   // «подсказка выключена», чего пользователь не просил. undefined исчезает из JSON, и
   // сервер берёт значение из своих defaults.
@@ -297,14 +389,15 @@ async function deploy(variant) {
       }),
     });
   } catch (err) {
+    // 401 или 422 - ответ про эту голову, поэтому и показывается на её карточке.
     $("state-detail").textContent = err.message;
-  } finally {
-    state.busy = false;
+    cardError = { id: variant, text: err.message };
+    await refreshStatus();
+    return;
   }
+  // Дальше карточку ведут SSE и опрос статуса: другая голова - другой словарь, но
+  // пересчитывать его до готовности движка нечем.
   await refreshStatus();
-  await refreshHeads();
-  // Другая голова — другой словарь, значит и другие отброшенные фразы.
-  await loadGlossary(true);
 }
 
 async function stopEngine() {
@@ -314,7 +407,7 @@ async function stopEngine() {
     $("state-detail").textContent = err.message;
   }
   await refreshStatus();
-  await refreshHeads();
+  await loadHeads();
 }
 
 /* ---------------------------------------------------------------- глоссарий */
@@ -823,17 +916,19 @@ function connectEvents() {
     }
     if (payload.type === "snapshot") {
       renderStatus(payload);
-      refreshHeads();
+      loadHeads();
       return;
     }
     if (payload.type === "status") {
+      // Карточки не пересобираются: renderStatus сам перечитает их, когда развёртывание
+      // закончится, а до тех пор меняется только фаза на карточке цели.
       refreshStatus();
-      refreshHeads();
       return;
     }
     if (payload.type === "download") {
       const status = Object.assign({}, state.status || {}, {
         status: "downloading",
+        deploying: payload.variant,
         download_percent: payload.percent,
       });
       renderStatus(status);
@@ -922,7 +1017,7 @@ function init() {
   bindDropZone();
   renderSnippets();
   refreshStatus();
-  refreshHeads();
+  loadHeads();
   loadGlossary();
   connectEvents();
   setInterval(refreshStatus, 5000);

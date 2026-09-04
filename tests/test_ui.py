@@ -150,3 +150,28 @@ async def test_head_cards_show_badges_with_their_source(client_ready):
     css = (await client_ready.get("/static/style.css")).text
     assert "head.badge" in js and "badge_note" in js
     assert ".head-badge" in css
+
+
+async def test_deploy_progress_lives_on_the_head_card(client_ready):
+    """Один индикатор вместо двух: взгляд там, где нажали, а не в шапке страницы."""
+    html = (await client_ready.get("/")).text
+    js = (await client_ready.get("/static/app.js")).text
+    css = (await client_ready.get("/static/style.css")).text
+    assert "progress-bar" not in html  # верхнего индикатора больше нет
+    assert "renderDeploying" in js and "status.deploying" in js
+    assert "head-progress" in css and 'data-indeterminate' in css
+    for phase in ("скачиваю", "запускаю движок", "собираю граф"):
+        assert phase in js
+
+
+async def test_head_cards_are_built_once_and_updated_in_place(client_ready):
+    js = (await client_ready.get("/static/app.js")).text
+    assert "state.heads" in js
+    # пересборка всех карточек на каждое событие и была причиной моргания
+    assert js.count('container.textContent = ""') == 0
+
+
+async def test_busy_state_comes_from_the_server_not_the_post(client_ready):
+    """POST /api/deploy возвращает 202 сразу, а развертывание идет еще минуты."""
+    js = (await client_ready.get("/static/app.js")).text
+    assert "state.busy = true" not in js and "state.busy = false" not in js

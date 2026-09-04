@@ -143,19 +143,6 @@ a { color: var(--amber); }
 .readout dt { font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-dim); }
 .readout dd { margin: 3px 0 0; font-size: 19px; }
 
-.progress { display: flex; align-items: center; gap: 10px; margin: 4px 0 12px; }
-.progress > div { flex: 1; height: 6px; background: var(--line-soft); border-radius: 3px; overflow: hidden; }
-#progress-bar { position: relative; }
-#progress-bar::after {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: var(--pct, 0%);
-  background: var(--amber);
-  transition: width 0.25s linear;
-}
-#progress-text { font-size: 12.5px; color: var(--ink-dim); min-width: 42px; text-align: right; }
-
 /* --- buttons --- */
 
 .btn {
@@ -213,6 +200,27 @@ a { color: var(--amber); }
 .head-meta span { font-family: var(--mono); font-size: 11px; color: var(--ink-dim); border: 1px solid var(--line); border-radius: 3px; padding: 2px 6px; }
 .head-meta .on { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, var(--line)); }
 .head-actions { display: flex; align-items: center; gap: 8px; }
+
+/* Прогресс развёртывания живёт на карточке, а не в шапке: индикатор один и стоит там,
+   где нажали. Процентов у проверки весов и сборки графа нет - полоса тогда бегущая. */
+.head-progress { display: flex; align-items: center; gap: 8px; flex: 1; min-height: 32px; }
+.head-progress-bar { position: relative; flex: 1; height: 6px; background: var(--line-soft); border-radius: 3px; overflow: hidden; }
+.head-progress-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--pct, 0%);
+  background: var(--amber);
+  transition: width 0.3s ease;
+}
+.head-progress[data-indeterminate="true"] .head-progress-bar::after {
+  width: 35%;
+  transition: none;
+  animation: slide 1.2s ease-in-out infinite;
+}
+@keyframes slide { 0% { left: -35%; } 100% { left: 100%; } }
+.head-progress-text { font-size: 12.5px; color: var(--ink-dim); white-space: nowrap; }
+.head .head-error { margin: 6px 0 0; font-size: 12.5px; color: var(--brick); }
 
 .options { margin-top: 16px; border-top: 1px solid var(--line-soft); padding-top: 12px; }
 .options summary { cursor: pointer; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-dim); }
