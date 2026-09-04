@@ -221,3 +221,11 @@ async def test_schema_reports_the_package_version(client_ready):
 
     schema = (await client_ready.get("/api/openapi.json")).json()
     assert schema["info"]["version"] == console.__version__
+
+
+async def test_status_reports_running_hotwords_settings(client_ready):
+    """Фикстура разворачивает EngineConfig() по умолчанию - статус обязан показать
+    и силу подсказки, и встроенный словарь: без них интерфейс не знает, что развёрнуто."""
+    body = (await client_ready.get("/api/status")).json()
+    assert body["engine"]["hotwords_boost"] == 5.0
+    assert body["engine"]["hotwords_default"] is False

@@ -152,6 +152,8 @@ function applyDefaults(defaults) {
   $("opt-itn").value = defaults.itn;
   $("opt-vad").value = String(defaults.vad);
   $("opt-pool").value = String(defaults.pool_size);
+  $("opt-hotwords-default").value = String(defaults.hotwords_default);
+  $("opt-boost").value = String(defaults.hotwords_boost);
 }
 
 async function refreshStatus() {
@@ -215,6 +217,10 @@ function tag(text, on) {
 async function deploy(variant) {
   state.busy = true;
   await refreshHeads();
+  // Пустое или нечисловое поле силы подсказки — не ноль: Number("") дал бы 0, то есть
+  // «подсказка выключена», чего пользователь не просил. undefined исчезает из JSON, и
+  // сервер берёт значение из своих defaults.
+  const boost = parseFloat($("opt-boost").value);
   try {
     await api("/api/deploy", {
       method: "POST",
@@ -225,6 +231,8 @@ async function deploy(variant) {
         itn: $("opt-itn").value,
         vad: $("opt-vad").value === "true",
         pool_size: Number($("opt-pool").value),
+        hotwords_default: $("opt-hotwords-default").value === "true",
+        hotwords_boost: Number.isFinite(boost) ? boost : undefined,
       }),
     });
   } catch (err) {

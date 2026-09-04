@@ -97,6 +97,8 @@ def _status_payload(request: Request) -> dict[str, Any]:
             "itn": current.itn if current else None,
             "vad": current.vad if current else None,
             "pool_size": current.pool_size if current else None,
+            "hotwords_boost": current.hotwords_boost if current else None,
+            "hotwords_default": current.hotwords_default if current else None,
             "running": supervisor.process.is_running,
         },
         "defaults": supervisor.default_config().to_dict(),

@@ -125,3 +125,13 @@ async def test_page_is_revalidated_and_assets_are_fingerprinted(client_ready):
     assert match, "ссылка на скрипт без отпечатка содержимого"
     assert re.search(r'/static/style\.css\?v=[0-9a-f]{8}', response.text)
     assert (await client_ready.get(f"/static/app.js?v={match.group(1)}")).status_code == 200
+
+
+async def test_deploy_sends_every_engine_field(client_ready):
+    """Иначе поля, которых нет в форме, молча берутся из старого состояния -
+    так HOTWORDS_DEFAULT=1 в .env не доходил до движка."""
+    html = (await client_ready.get("/")).text
+    js = (await client_ready.get("/static/app.js")).text
+    assert "opt-hotwords-default" in html and "opt-boost" in html
+    for field in ("hotwords_default", "hotwords_boost"):
+        assert field in js, f"deploy() не посылает {field}"
