@@ -241,3 +241,9 @@ async def test_glossary_reports_env_phrases_missing_from_the_list(client_ready):
     client_ready.app.state.settings.initial_context = "АйМоп, Совсемновая"
     body = (await client_ready.get("/api/glossary")).json()
     assert "Совсемновая" in body["env_missing"]
+
+
+async def test_models_expose_badges(client_ready):
+    heads = {h["id"]: h for h in (await client_ready.get("/api/models")).json()["heads"]}
+    assert heads["e2e_rnnt"]["badge"] == "лучшая для русского"
+    assert heads["rnnt"]["badge"] is None

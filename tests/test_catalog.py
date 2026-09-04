@@ -36,3 +36,12 @@ def test_is_downloaded_unknown_head_is_false(tmp_path):
 def test_openai_model_ids():
     assert openai_model_id("rnnt") == "gigaam-v3-rnnt"
     assert openai_model_id("ml_ctc_large") == "gigaam-multilingual-large-ctc"
+
+
+def test_badges_name_our_own_measurement_not_someone_elses_table():
+    assert HEADS["e2e_rnnt"].badge == "лучшая для русского"
+    assert HEADS["ml_ctc_large"].badge == "лучшая мультиязычная"
+    assert HEADS["rnnt"].badge is None and HEADS["ml_ctc"].badge is None
+    for head in HEADS.values():
+        if head.badge:
+            assert "наш замер" in head.badge_note

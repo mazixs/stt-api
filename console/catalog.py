@@ -8,6 +8,13 @@ what is actually present, since it verifies checksums too.
 measured rather than copied from upstream's docs: the figures we had inherited
 overstated `ml_ctc_large` by 56 MB, which is the one number a user checks before
 deciding to wait for it.
+
+Значки (`badge`) ставятся по нашему собственному замеру, а не по внешним
+лидербордам, и на то есть причина. В лидерборде Шмырева GigaAM v3 нет вовсе -
+таблица последний раз обновлялась 14.09.2025. Мультиязычный трек HF Open ASR
+Leaderboard русского не содержит, поэтому назвать голову "лучшей мультиязычной"
+по нему нельзя. Таблица разработчика - заявление производителя. Остается наш
+замер, и подпись значка честно называет его своим.
 """
 
 from dataclasses import dataclass
@@ -23,6 +30,10 @@ class Head:
     native_punctuation: bool
     size_mb: int
     files: tuple[str, ...]
+    # Значок на карточке и подсказка к нему. Умолчания - чтобы не трогать порядок
+    # позиционных полей у голов без значка.
+    badge: str | None = None
+    badge_note: str | None = None
 
 
 HEADS: dict[str, Head] = {
@@ -53,6 +64,10 @@ HEADS: dict[str, Head] = {
             "v3_e2e_rnnt_joint.onnx",
             "v3_e2e_rnnt_vocab.txt",
         ),
+        badge="лучшая для русского",
+        badge_note="Это наш замер 11.08.2026: WER 4.32% на FLEURS ru против 6.56% у rnnt "
+        "и 6.25% у ml_ctc_large; на живой диктовке без междометий 4.09% против Soniox. "
+        "Подробности - docs/research/head-choice-and-wer.md",
     ),
     "ml_ctc": Head(
         id="ml_ctc",
@@ -71,6 +86,10 @@ HEADS: dict[str, Head] = {
         native_punctuation=False,
         size_mb=564,
         files=("multilingual_large_ctc.int8.onnx", "multilingual_vocab.txt"),
+        badge="лучшая мультиязычная",
+        badge_note="Это наш замер 11.08.2026: WER 6.25% на FLEURS ru против ml_ctc, "
+        "и пять языков. Вдвое медленнее e2e_rnnt и 2.5 ГиБ на первом запуске. "
+        "Подробности - docs/research/head-choice-and-wer.md",
     ),
 }
 

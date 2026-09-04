@@ -137,6 +137,8 @@ async def models(request: Request) -> dict[str, Any]:
                 "languages": list(head.languages),
                 "native_punctuation": head.native_punctuation,
                 "size_mb": head.size_mb,
+                "badge": head.badge,
+                "badge_note": head.badge_note,
                 "downloaded": is_downloaded(head.id, settings.model_dir),
                 "deployed": current is not None and current.variant == head.id,
             }

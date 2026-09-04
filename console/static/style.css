@@ -193,6 +193,22 @@ a { color: var(--amber); }
 .head[data-deployed="true"] { border-left-color: var(--green); background: color-mix(in srgb, var(--green) 6%, var(--panel)); }
 .head h3 { margin: 0; font-size: 15.5px; font-weight: 600; }
 .head p { margin: 0; font-size: 13px; color: var(--ink-dim); }
+/* Капсула рядом с названием головы: подпись короткая, источник - в подсказке. */
+.head-badge {
+  margin-left: .5em;
+  vertical-align: middle;
+  cursor: help;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--amber) 35%, var(--line));
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
 .head-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
 .head-meta span { font-family: var(--mono); font-size: 11px; color: var(--ink-dim); border: 1px solid var(--line); border-radius: 3px; padding: 2px 6px; }
 .head-meta .on { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, var(--line)); }

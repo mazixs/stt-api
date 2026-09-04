@@ -143,3 +143,10 @@ async def test_ui_shows_env_divergence_and_offers_to_deploy_it(client_ready):
     assert "env-diff" in html and "btn-deploy-env" in html
     assert "env.diverges" in js and "env_missing" in js
     assert "btn-glossary-env" in html
+
+
+async def test_head_cards_show_badges_with_their_source(client_ready):
+    js = (await client_ready.get("/static/app.js")).text
+    css = (await client_ready.get("/static/style.css")).text
+    assert "head.badge" in js and "badge_note" in js
+    assert ".head-badge" in css

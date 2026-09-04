@@ -234,6 +234,15 @@ async function refreshHeads() {
 
     const title = document.createElement("h3");
     title.textContent = head.title;
+    /* Значок - про наш собственный замер, а не про чужую таблицу, поэтому источник
+       висит подсказкой прямо на нём. */
+    if (head.badge) {
+      const badge = document.createElement("span");
+      badge.className = "head-badge";
+      badge.textContent = head.badge;
+      badge.title = head.badge_note || "";
+      title.appendChild(badge);
+    }
     const subtitle = document.createElement("p");
     subtitle.textContent = head.subtitle;
 
