@@ -321,6 +321,9 @@ docker compose -f docker-compose.yml -f docker-compose.local.yml down    # не 
 Номер лежит в `console/__init__.py`, оттуда его берут и `pyproject.toml`, и схема на
 `/api/openapi.json`.
 
+Замер новой головы или новой версии движка - [`bench/`](bench/README.md): два прогона
+`run` и одна команда `compare` дают время и WER второго прогона относительно первого.
+
 Ручной сценарий проверки на живом движке - [`docs/manual-smoke.md`](docs/manual-smoke.md).
 Остальные документы - [`docs/`](docs/): [о продукте](docs/product.md),
 [технические решения](docs/decisions.md),
