@@ -8,6 +8,10 @@
 16-ядерном настольном CPU 29.07.2026; на другом железе цифры будут другими,
 проверяйте порядок величин и поведение, а не точные значения.
 
+**Сценарий рассчитан на свежую установку.** Он разворачивает голову, правит глоссарий
+и убивает процесс движка, поэтому на машине с рабочим томом сначала сделайте копию
+`data/` целиком, а после проверки верните ее на место.
+
 ## 1. Сборка и запуск
 
 ```sh
@@ -125,6 +129,14 @@ docker compose exec stt-api sh -c 'ps -eo args | grep "[g]igastt serve"' \
 
 ## 4. Глоссарий без перезапуска
 
+**Этот шаг перезаписывает глоссарий целиком, а не дописывает к нему.** На рабочей
+установке сначала заберите копию, иначе весь список заменится двумя фразами:
+
+```sh
+curl -s localhost:8091/api/glossary | python3 -c "import json,sys; print(json.load(sys.stdin)['text'])" > hotwords.bak
+wc -l hotwords.bak
+```
+
 ```sh
 curl -s -X POST localhost:8091/api/glossary \
   -H 'content-type: application/json' -d '{"text":"лукоморье|8, АйМоп"}'
@@ -134,6 +146,14 @@ curl -s localhost:8091/api/status | grep -o '"status":"[a-z]*"'
 
 Ожидается `{"count":2,"applied":true}`, файл с фразами через табуляцию и статус
 `ready` — процесс движка не перезапускался, он перечитал глоссарий на месте.
+
+Сразу после проверки вернуть список обратно и убедиться, что число фраз совпало с
+тем, что показал `wc -l`:
+
+```sh
+python3 -c "import json; print(json.dumps({'text': open('hotwords.bak', encoding='utf-8').read()}, ensure_ascii=False))" > restore.json
+curl -s -X POST localhost:8091/api/glossary -H 'content-type: application/json' -d @restore.json
+```
 
 ## 5. Восстановление после падения движка
 
@@ -242,5 +262,9 @@ curl -s -X POST localhost:8091/api/test -F file=@example.wav
 
 ```sh
 docker compose down          # контейнер удалён, models/ и data/ остались
-rm -f example.wav long_example.wav
+rm -f example.wav long_example.wav speech.webm limit.wav hotwords.bak restore.json
 ```
+
+Если проверка шла на рабочей установке, здесь же убедитесь, что глоссарий вернулся
+(шаг 4) и что в `data/state.json` стоит та голова, которая была развёрнута до
+проверки: сценарий разворачивает свою и оставляет её.
