@@ -47,10 +47,16 @@ def test_argv_maps_config_to_engine_flags(console_settings):
 
 
 def test_optional_flags_omitted_when_off(console_settings):
-    argv = build_argv(console_settings, cfg())
+    argv = build_argv(console_settings, cfg(hotwords_default=False))
     assert "--vad" not in argv
     assert "--hotwords-default" not in argv
     assert "--enable-jobs" not in argv
+
+
+def test_brand_lexicon_flag_present_by_default(console_settings):
+    """Умолчание изменилось на включенный словарь, и это должно доходить до argv,
+    а не только до .env."""
+    assert "--hotwords-default" in build_argv(console_settings, cfg())
 
 
 def test_enable_jobs_flag_follows_settings(console_settings):

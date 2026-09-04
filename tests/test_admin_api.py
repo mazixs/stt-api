@@ -228,4 +228,4 @@ async def test_status_reports_running_hotwords_settings(client_ready):
     и силу подсказки, и встроенный словарь: без них интерфейс не знает, что развёрнуто."""
     body = (await client_ready.get("/api/status")).json()
     assert body["engine"]["hotwords_boost"] == 5.0
-    assert body["engine"]["hotwords_default"] is False
+    assert body["engine"]["hotwords_default"] is True

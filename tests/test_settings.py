@@ -12,6 +12,10 @@ def test_defaults_are_dictation_friendly():
     assert s.autostart is True
     assert s.engine_base_url == "http://127.0.0.1:9876"
     assert s.api_key == ""
+    # Встроенный словарь брендов включен по умолчанию: замер 04.09.2026 на 27 минутах
+    # настоящей диктовки показал одно изменение на 2654 слова, и оно в сторону
+    # правильного написания (см. docs/research/head-choice-and-wer.md).
+    assert s.hotwords_default is True
 
 
 def test_env_overrides_and_paths(monkeypatch, tmp_path):

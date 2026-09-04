@@ -23,7 +23,7 @@ class EngineConfig:
     vad: bool = False
     pool_size: int = 1
     hotwords_boost: float = 5.0  # the engine's own default; see console.settings
-    hotwords_default: bool = False
+    hotwords_default: bool = True  # measured, not assumed; see console.settings
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

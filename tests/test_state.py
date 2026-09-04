@@ -55,6 +55,13 @@ def test_config_equality_and_dict_roundtrip():
     assert EngineConfig.from_dict(cfg(vad=True).to_dict()) == cfg(vad=True)
 
 
+def test_brand_lexicon_is_on_by_default():
+    """Состояние, в котором нет этого поля (старый state.json), должно получить
+    включенный словарь, как и .env."""
+    assert EngineConfig().hotwords_default is True
+    assert EngineConfig.from_dict({"variant": "rnnt"}).hotwords_default is True
+
+
 def test_from_dict_ignores_unknown_keys_and_fills_defaults():
     restored = EngineConfig.from_dict({"variant": "e2e_rnnt", "junk": 1})
     assert restored.variant == "e2e_rnnt"

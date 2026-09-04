@@ -41,7 +41,14 @@ class Settings(BaseSettings):
     # 2.17.0: at 5.0 a glossary whose words are absent leaves the transcript
     # byte-identical, and one whose words are present corrects them.
     hotwords_boost: float = 5.0
-    hotwords_default: bool = False
+    # Встроенный словарь движка: 30 бытовых брендов строчной кириллицей (эпл, айфон,
+    # яндекс, вайлдберриз и такие же), вес 1.0 у каждого. Технической лексике он не
+    # помогает - для нее есть свой глоссарий. Включен по умолчанию решением владельца
+    # от 04.09.2026, и только после замера: A/B на 27 минутах настоящей диктовки
+    # (9 записей, 2654 слова) дал одно различие на весь набор - "mascod" стало
+    # "маскот", то есть исправление, а не выдумка. Задержка не изменилась
+    # (docs/research/head-choice-and-wer.md).
+    hotwords_default: bool = True
 
     autostart: bool = True
     max_upload_mb: int = Field(default=150, ge=1)
