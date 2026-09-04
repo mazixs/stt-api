@@ -230,3 +230,44 @@ async def test_boot_warns_about_divergence_in_the_log(console_settings, bus):
     await supervisor.restore_on_boot()
     assert any("ВНИМАНИЕ" in line and "hotwords_default" in line for line in bus.log_lines())
     await supervisor.shutdown()
+
+
+async def test_deploying_names_the_target_and_clears_after_ready(
+    console_settings, bus, monkeypatch
+):
+    """Интерфейс рисует прогресс на карточке цели, поэтому цель обязана быть названа.
+
+    Во время отката цель - прежняя голова, а не та, что не поднялась: иначе полоса
+    висела бы на карточке, которую уже никто не разворачивает.
+    """
+    supervisor = Supervisor(console_settings, bus)
+    try:
+        await supervisor.deploy(cfg())
+        assert supervisor.deploying is None
+
+        stream = bus.subscribe()
+        monkeypatch.setenv("FAKE_UNHEALTHY_VARIANT", "e2e_rnnt")
+        await supervisor.deploy(cfg(variant="e2e_rnnt"), startup_timeout=3)
+        assert supervisor.status == "ready"
+        assert supervisor.deploying is None
+
+        seen = []
+        while True:
+            try:
+                seen.append(await anext(stream))
+            except StopAsyncIteration:  # pragma: no cover
+                break
+            if seen[-1].get("status") == "ready":
+                break
+
+        starting = [
+            event
+            for event in seen
+            if event.get("type") == "status" and event.get("status") == "starting"
+        ]
+        rollback = [e for e in starting if "откат" in (e.get("detail") or "").lower()]
+        forward = [e for e in starting if "откат" not in (e.get("detail") or "").lower()]
+        assert forward and all(event["variant"] == "e2e_rnnt" for event in forward)
+        assert rollback and all(event["variant"] == "rnnt" for event in rollback)
+    finally:
+        await supervisor.shutdown()

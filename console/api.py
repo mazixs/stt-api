@@ -91,6 +91,9 @@ def _status_payload(request: Request) -> dict[str, Any]:
         "status": supervisor.status,
         "detail": supervisor.detail,
         "download_percent": supervisor.download_percent,
+        # Цель развертывания, а не работающий процесс: консоль рисует прогресс на
+        # карточке той головы, которую разворачивают, и до первого запуска процесса нет.
+        "deploying": supervisor.deploying,
         "engine": {
             "variant": current.variant if current else None,
             "punctuation": current.punctuation if current else None,

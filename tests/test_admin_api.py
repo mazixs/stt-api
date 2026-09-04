@@ -247,3 +247,18 @@ async def test_models_expose_badges(client_ready):
     heads = {h["id"]: h for h in (await client_ready.get("/api/models")).json()["heads"]}
     assert heads["e2e_rnnt"]["badge"] == "лучшая для русского"
     assert heads["rnnt"]["badge"] is None
+
+
+async def test_status_names_the_head_being_deployed(client_stopped, monkeypatch):
+    """Цель развёртывания видна снаружи: без неё UI не знает, чью карточку красить."""
+    monkeypatch.setenv("FAKE_DOWNLOAD_SLOW", "0.15")
+    await client_stopped.post("/api/deploy", json={"variant": "e2e_rnnt"})
+    seen = []
+    for _ in range(120):
+        body = (await client_stopped.get("/api/status")).json()
+        seen.append((body["status"], body.get("deploying")))
+        if body["status"] == "ready":
+            break
+        await _sleep(0.1)
+    assert ("downloading", "e2e_rnnt") in seen or ("starting", "e2e_rnnt") in seen
+    assert seen[-1] == ("ready", None)

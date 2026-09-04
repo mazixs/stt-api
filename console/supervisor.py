@@ -44,6 +44,9 @@ class Supervisor:
         self._desired: EngineConfig | None = stored.desired
         self._last_good: EngineConfig | None = stored.last_good
         self._download_percent: int | None = None
+        # Цель развертывания, а не работающий процесс: пока веса качаются, работающего
+        # процесса может не быть вовсе, а карточке в консоли уже есть что показать.
+        self._deploying: str | None = None
 
         self.process = EngineProcess(
             settings,
@@ -80,6 +83,16 @@ class Supervisor:
     @property
     def download_percent(self) -> int | None:
         return self._download_percent
+
+    @property
+    def deploying(self) -> str | None:
+        """Голова, которую разворачиваем сейчас; None, когда ничего не происходит.
+
+        Отличается от `current`: там процесс, который уже работает, а здесь цель. При
+        откате целью становится прежняя голова - полоса прогресса должна переехать на
+        ее карточку, а не остаться на той, что не поднялась.
+        """
+        return self._deploying if self._status in ("downloading", "starting") else None
 
     @property
     def glossary_count(self) -> int:
@@ -139,6 +152,8 @@ class Supervisor:
     def _set_status(self, status: str, detail: str = "") -> None:
         self._status = status
         self._detail = detail
+        if status not in ("downloading", "starting"):
+            self._deploying = None
         self.state_file.save(
             State(
                 status=status,
@@ -152,7 +167,7 @@ class Supervisor:
                 "type": "status",
                 "status": status,
                 "detail": detail,
-                "variant": self.current.variant if self.current else None,
+                "variant": self._deploying or (self.current.variant if self.current else None),
                 "percent": self._download_percent,
             }
         )
@@ -165,6 +180,7 @@ class Supervisor:
 
     async def _deploy_locked(self, cfg: EngineConfig, startup_timeout: float) -> None:
         self._desired = cfg
+        self._deploying = cfg.variant
         self._download_percent = None
         self._set_status("downloading", f"Проверяю и скачиваю модель ({cfg.variant})")
         if not await self._download_with_retries(cfg):
@@ -227,6 +243,7 @@ class Supervisor:
         if target is None or target == failed:
             self._set_status("error", f"Не удалось запустить модель {failed.variant}: {reason}")
             return
+        self._deploying = target.variant
         self._set_status("starting", f"Откат на предыдущую модель ({target.variant})")
         if await self._start_and_wait(target, startup_timeout):
             self._desired = target
@@ -246,7 +263,13 @@ class Supervisor:
         phase = event.get("phase")
         if phase == "progress":
             self._download_percent = int(event.get("percent") or 0)
-            self.bus.publish({"type": "download", "percent": self._download_percent})
+            self.bus.publish(
+                {
+                    "type": "download",
+                    "percent": self._download_percent,
+                    "variant": self._deploying,
+                }
+            )
         elif phase == "log":
             self.bus.publish_log(str(event.get("line") or ""))
         elif phase in ("verify", "quantize"):
@@ -276,6 +299,7 @@ class Supervisor:
         cfg = self.process.config or self.default_config()
         async with self._lock:
             await self.process.stop()
+            self._deploying = cfg.variant
             self._set_status("starting", "Перезапускаю движок для нового глоссария")
             if await self._start_and_wait(cfg, STARTUP_TIMEOUT):
                 self._set_status("ready", f"Готово: {cfg.variant}")
@@ -356,6 +380,7 @@ class Supervisor:
             async with self._lock:
                 if self.process.is_running:
                     return
+                self._deploying = cfg.variant
                 self._set_status("starting", f"Поднимаю движок заново ({cfg.variant})")
                 if await self._start_and_wait(cfg, STARTUP_TIMEOUT):
                     self._consecutive_failures = 0
