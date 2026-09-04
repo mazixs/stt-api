@@ -309,20 +309,25 @@ function buildHeadCard(head) {
    Процентов у проверки весов и сборки графа нет, поэтому полоса там бегущая. */
 
 const SLOW_START_MS = 20000;
+const ROLLBACK = /откат/i;
 
 const PHASE_WORDS = {
   downloading: (s) => (s.download_percent === null || s.download_percent === undefined)
     ? "проверяю веса"
     : "скачиваю " + s.download_percent + "%",
   starting: (s) => {
-    if (/откат/i.test(s.detail || "")) return "откат на прежнюю голову";
+    if (ROLLBACK.test(s.detail || "")) return "откат на прежнюю голову";
     return startingSince && Date.now() - startingSince > SLOW_START_MS
       ? "собираю граф, первый запуск до 2 минут"
       : "запускаю движок";
   },
 };
 
+// `lastTarget` - то, что разворачивается прямо сейчас (при откате оно меняется на
+// прежнюю голову), `clickedTarget` - то, что нажали: приговор нужен именно там.
 let lastTarget = null;
+let clickedTarget = null;
+let deployingSeries = false;
 let startingSince = 0;
 // Жалоба держится на карточке до следующей попытки: сервер уже через секунду отвечает
 // «готово» или «остановлено», и без этого текст ошибки исчезал бы раньше, чем прочтут.
@@ -334,10 +339,19 @@ function renderDeploying(status) {
   if (status.status !== "starting" || target !== lastTarget) startingSince = 0;
   if (status.status === "starting" && !startingSince) startingSince = Date.now();
   if (active) {
+    if (!deployingSeries) clickedTarget = target;
+    deployingSeries = true;
     lastTarget = target;
     cardError = null;
-  } else if (status.status === "error" && lastTarget) {
-    cardError = { id: lastTarget, text: status.detail || "не удалось развернуть" };
+  } else {
+    deployingSeries = false;
+    if (status.status === "error" && lastTarget) {
+      cardError = { id: lastTarget, text: status.detail || "не удалось развернуть" };
+    } else if (status.status === "ready" && clickedTarget && ROLLBACK.test(status.detail || "")) {
+      // Откат кончается зелёным `ready` на другой голове, и без этой ветки о неудаче
+      // говорила бы только пилюля наверху - ровно то, что мы и убирали.
+      cardError = { id: clickedTarget, text: status.detail };
+    }
   }
 
   state.heads.forEach((entry, id) => {
@@ -369,6 +383,7 @@ function tag(text, on) {
 async function deploy(variant) {
   // Карточка отвечает до первого события с сервера: между нажатием и SSE проходит
   // заметная доля секунды, и молчание в этот момент читается как «кнопка не сработала».
+  clickedTarget = variant;
   renderDeploying({ status: "downloading", deploying: variant, download_percent: null, detail: "" });
   // Пустое или нечисловое поле силы подсказки — не ноль: Number("") дал бы 0, то есть
   // «подсказка выключена», чего пользователь не просил. undefined исчезает из JSON, и

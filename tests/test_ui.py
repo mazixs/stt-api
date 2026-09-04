@@ -175,3 +175,12 @@ async def test_busy_state_comes_from_the_server_not_the_post(client_ready):
     """POST /api/deploy возвращает 202 сразу, а развертывание идет еще минуты."""
     js = (await client_ready.get("/static/app.js")).text
     assert "state.busy = true" not in js and "state.busy = false" not in js
+
+
+async def test_rollback_verdict_stays_on_the_card_that_was_clicked(client_ready):
+    """Откат кончается зелёным `ready`, а нажимали другую голову: без этой ветки о
+    неудаче говорила бы только пилюля наверху — ровно то, что мы и убирали."""
+    js = (await client_ready.get("/static/app.js")).text
+    assert "clickedTarget" in js
+    assert 'status.status === "ready" && clickedTarget' in js
+    assert "ROLLBACK.test(status.detail" in js
