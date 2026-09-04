@@ -25,6 +25,8 @@ RESULTS = Path(__file__).parent / "results"
 AUDIO_SUFFIXES = (".wav", ".webm", ".mp3", ".m4a", ".ogg", ".opus", ".flac")
 READY_TIMEOUT = 600.0
 REQUEST_TIMEOUT = 1800.0
+# Сколько ждать, пока супервизор заметит новое развертывание и уйдет из `ready`.
+LEAVE_READY_TIMEOUT = 5.0
 
 
 # --------------------------------------------------------------------- сравнение
@@ -91,6 +93,19 @@ class Console:
         """
         response = self.client.post(f"{self.url}/api/deploy", json=body)
         response.raise_for_status()
+
+        # `/api/deploy` отвечает 202 сразу, а статус меняет фоновая задача супервизора.
+        # Первый же `GET /api/status` поэтому может застать еще `ready` от прежнего
+        # развертывания - особенно когда просят ту же конфигурацию, что уже стоит.
+        # Приняв это за готовность, мы отдали бы первый файл в момент перезапуска
+        # движка и получили 503. Ждем, пока статус уйдет из `ready`; если не ушел за
+        # отведенное время, значит супервизор уже отработал, и ждать нечего.
+        leave_deadline = time.monotonic() + LEAVE_READY_TIMEOUT
+        while time.monotonic() < leave_deadline:
+            if self.status()["status"] != "ready":
+                break
+            time.sleep(0.2)
+
         deadline = time.monotonic() + READY_TIMEOUT
         while time.monotonic() < deadline:
             status = self.status()
@@ -194,9 +209,11 @@ def command_run(args: argparse.Namespace) -> int:
     for record in records:
         seconds = record["audio_seconds"] or 0
         rtf = record["rtf"]
+        # `rtf is not None`, а не просто `rtf`: ноль - это измеренное значение, и
+        # печатать вместо него прочерк значило бы сказать "не мерили".
         print(
             f"{record['file'][:28]:28} {seconds:12.1f}с {record['elapsed']:8.3f}с "
-            f"{(f'{rtf:.3f}' if rtf else '-'):>7}"
+            f"{(f'{rtf:.3f}' if rtf is not None else '-'):>7}"
         )
     return 0
 

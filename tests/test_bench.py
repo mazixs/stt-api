@@ -157,6 +157,7 @@ def test_deploy_refuses_when_the_engine_came_up_as_something_else(monkeypatch):
     """Супервизор откатывается на прежнюю голову, если новая не поднялась. Молча
     принять это значило бы подписать чужие цифры своим ярлыком."""
     console = bench.Console("http://console")
+    monkeypatch.setattr(bench, "LEAVE_READY_TIMEOUT", 0.1)
     monkeypatch.setattr(bench.Console, "status", lambda self: {
         "status": "ready", "engine": {"variant": "rnnt", "vad": False},
     })
@@ -171,8 +172,70 @@ def test_deploy_refuses_when_the_engine_came_up_as_something_else(monkeypatch):
         console.close()
 
 
+def test_deploy_waits_out_the_stale_ready_from_the_previous_deployment(monkeypatch):
+    """`/api/deploy` отвечает 202 сразу, статус меняет фоновая задача.
+
+    Если поверить первому же `ready`, замер отдал бы первый файл в момент
+    перезапуска движка и получил 503 - особенно когда просят ту же конфигурацию,
+    что уже развернута.
+    """
+    seen: list[str] = []
+    # Первое `ready` - несвежее, от прежнего развертывания.
+    statuses = ["ready", "starting", "ready"]
+
+    def fake_status(self):
+        value = statuses[min(len(seen), len(statuses) - 1)]
+        seen.append(value)
+        return {"status": value, "engine": {"variant": "rnnt"}}
+
+    monkeypatch.setattr(bench, "LEAVE_READY_TIMEOUT", 5.0)
+    monkeypatch.setattr(bench.Console, "status", fake_status)
+    console = bench.Console("http://console")
+    monkeypatch.setattr(console.client, "post", lambda *a, **kw: _Accepted())
+    try:
+        assert console.deploy({"variant": "rnnt"})["variant"] == "rnnt"
+    finally:
+        console.close()
+    # Промежуточное состояние обязано быть увидено, иначе ожидание не сработало.
+    assert "starting" in seen
+    assert seen.index("starting") < len(seen) - 1
+
+
+def test_deploy_moves_on_when_the_status_never_leaves_ready(monkeypatch):
+    """Супервизор мог отработать раньше, чем мы успели спросить: это не ошибка."""
+    monkeypatch.setattr(bench, "LEAVE_READY_TIMEOUT", 0.3)
+    monkeypatch.setattr(bench.Console, "status", lambda self: {
+        "status": "ready", "engine": {"variant": "rnnt"},
+    })
+    console = bench.Console("http://console")
+    monkeypatch.setattr(console.client, "post", lambda *a, **kw: _Accepted())
+    try:
+        assert console.deploy({"variant": "rnnt"})["variant"] == "rnnt"
+    finally:
+        console.close()
+
+
+def test_rtf_zero_prints_as_a_number_not_a_dash(capsys, tmp_path, monkeypatch):
+    """Ноль - измеренное значение; прочерк на его месте читался бы как "не мерили"."""
+    monkeypatch.setattr(bench, "RESULTS", tmp_path / "results")
+    monkeypatch.setattr(bench, "collect_audio", lambda items: [tmp_path / "тихо.wav"])
+    (tmp_path / "тихо.wav").write_bytes(wav_bytes(seconds=1))
+    monkeypatch.setattr(bench.Console, "status", lambda self: {
+        "status": "ready", "engine": {"variant": "rnnt"},
+    })
+    monkeypatch.setattr(bench.Console, "transcribe", lambda self, path: {
+        "text": "", "elapsed": 0.5, "audio_seconds": 0.0, "rtf": 0.0,
+    })
+    monkeypatch.setattr(bench, "console_version", lambda url, client: "1.2.0")
+
+    assert bench.main(["run", "--audio", str(tmp_path), "--label", "нули", "--repeat", "1"]) == 0
+    printed = capsys.readouterr().out
+    assert "0.000" in printed and " - " not in printed
+
+
 def test_deploy_gives_up_when_the_engine_reports_an_error(monkeypatch):
     console = bench.Console("http://console")
+    monkeypatch.setattr(bench, "LEAVE_READY_TIMEOUT", 0.1)
     monkeypatch.setattr(bench.Console, "status", lambda self: {
         "status": "error", "detail": "модель не запустилась", "engine": {},
     })
