@@ -7,26 +7,15 @@ on SIGTERM with a hard kill as the backstop. Nothing here knows about audio.
 
 import asyncio
 import contextlib
-import os
-import re
 import signal
 from collections.abc import Callable
 from typing import Any
 
 import httpx
 
-from .downloader import engine_command
+from .downloader import engine_command, engine_env, strip_ansi
 from .settings import Settings
 from .state import EngineConfig
-
-
-# Движок пишет цветной вывод, а консоль показывает его в <pre>: без чистки в логах
-# видны квадратики ESC[2m вместо текста. Флага отключения цвета у `gigastt serve` нет.
-_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
-
-
-def strip_ansi(line: str) -> str:
-    return _ANSI.sub("", line)
 
 
 class EngineStartupError(RuntimeError):
@@ -106,14 +95,8 @@ class EngineProcess:
         if self.is_running:
             raise RuntimeError("engine already running")
         argv = build_argv(self.settings, cfg)
-        env = dict(os.environ)
+        env = engine_env(self.settings)
         env["RUST_LOG"] = f"gigastt={self.settings.log_level}"
-        # Если библиотека логирования движка уважает NO_COLOR, цвета не появятся у
-        # источника, и `docker logs` тоже станет читаемым; если нет - чистка в `_pump`
-        # все равно сработает.
-        env["NO_COLOR"] = "1"
-        if self.settings.hf_token:
-            env["HF_TOKEN"] = self.settings.hf_token
         self.settings.model_dir.mkdir(parents=True, exist_ok=True)
         self.settings.hotwords_path.parent.mkdir(parents=True, exist_ok=True)
 

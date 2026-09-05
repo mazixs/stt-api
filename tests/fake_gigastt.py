@@ -73,6 +73,14 @@ def cmd_download(args: argparse.Namespace) -> int:
             failure = None
 
     os.makedirs(args.model_dir, exist_ok=True)
+    # Скачивание движок тоже комментирует цветными строками - и они идут в тот же
+    # раздел "Логи", что и строки `serve`.
+    if os.environ.get("FAKE_ANSI") == "1":
+        sys.stderr.write(
+            "\x1b[2m2026-09-05T09:41:37Z\x1b[0m \x1b[33m WARN\x1b[0m "
+            "\x1b[2mgigastt_core::model::download\x1b[0m: Model ready\n"
+        )
+        sys.stderr.flush()
     total = 1000
     for name in files:
         for done in (total // 2, total):

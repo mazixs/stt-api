@@ -47,3 +47,14 @@ async def test_missing_binary_raises_typed_error(console_settings):
 async def test_unknown_variant_rejected(console_settings):
     with pytest.raises(ValueError):
         await download(console_settings, "whisper-large", lambda event: None)
+
+
+async def test_download_log_lines_reach_the_console_without_ansi(console_settings, monkeypatch):
+    """Строки скачивания идут в тот же раздел "Логи", что и строки движка: чистка
+    нужна и здесь, иначе в консоли снова квадратики - проверено на проде 05.09.2026."""
+    monkeypatch.setenv("FAKE_ANSI", "1")
+    seen: list[dict] = []
+    await download(console_settings, "rnnt", seen.append)
+    logs = [event["line"] for event in seen if event.get("phase") == "log"]
+    assert logs, "заглушка должна была написать хотя бы одну строку в stderr"
+    assert not any("\x1b" in line for line in logs)

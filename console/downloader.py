@@ -7,6 +7,8 @@ the UI and turns exit codes into messages a non-programmer can act on.
 
 import asyncio
 import json
+import os
+import re
 import sys
 from collections.abc import Callable
 from typing import Any
@@ -41,6 +43,26 @@ class DownloadError(RuntimeError):
         self.kind = kind
         self.message = message
         self.exit_code = exit_code
+
+
+# Движок пишет цветной вывод и на скачивании, и на `serve`, а консоль показывает
+# его в <pre>: без чистки в логах видны квадратики ESC[2m вместо текста. Флага
+# отключения цвета у CLI нет, зато NO_COLOR он уважает (замер 05.09.2026), и обе
+# меры стоят вместе: переменная убирает цвет у источника, чистка страхует.
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def strip_ansi(line: str) -> str:
+    return _ANSI.sub("", line)
+
+
+def engine_env(settings: Settings) -> dict[str, str]:
+    """Окружение для дочернего процесса движка."""
+    env = dict(os.environ)
+    env["NO_COLOR"] = "1"
+    if settings.hf_token:
+        env["HF_TOKEN"] = settings.hf_token
+    return env
 
 
 def engine_command(settings: Settings, *args: str) -> list[str]:
@@ -101,6 +123,7 @@ async def download(settings: Settings, variant: str, on_event: EventSink) -> Non
             *argv,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=engine_env(settings),
         )
     except OSError as exc:
         raise DownloadError("other", f"Не удалось запустить движок: {exc}", 1) from exc
@@ -111,14 +134,14 @@ async def download(settings: Settings, variant: str, on_event: EventSink) -> Non
     async def pump_stderr() -> None:
         assert process.stderr is not None
         async for raw in process.stderr:
-            line = raw.decode("utf-8", "replace").rstrip()
+            line = strip_ansi(raw.decode("utf-8", "replace")).rstrip()
             if line:
                 on_event({"phase": "log", "line": line})
 
     async def pump_stdout() -> None:
         assert process.stdout is not None
         async for raw in process.stdout:
-            line = raw.decode("utf-8", "replace").strip()
+            line = strip_ansi(raw.decode("utf-8", "replace")).strip()
             if not line:
                 continue
             try:
