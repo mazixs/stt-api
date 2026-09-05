@@ -1,3 +1,6 @@
+import re
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -67,3 +70,13 @@ def test_engine_config_from_env_ignores_console_only_knobs():
     s = Settings(_env_file=None, console_port=9999, api_key="x")
     assert s.explicit_engine_fields() == set()
     assert s.engine_config_from_env() == Settings(_env_file=None).engine_config_from_env()
+
+
+def test_env_example_leaves_engine_settings_commented_out():
+    """Настройки движка выбираются в консоли; строки в образце закомментированы, иначе
+    каждая установка стартовала бы с расхождением между .env и выбором пользователя."""
+    text = (Path(__file__).parents[1] / ".env.example").read_text(encoding="utf-8")
+    for name in ("MODEL_VARIANT", "PUNCTUATION", "ITN", "VAD", "POOL_SIZE",
+                 "HOTWORDS_BOOST", "HOTWORDS_DEFAULT", "INITIAL_CONTEXT"):
+        assert re.search(rf"^# ?{name}=", text, re.M), f"{name} должна быть закомментирована"
+        assert not re.search(rf"^{name}=", text, re.M), f"{name} задана явно"
