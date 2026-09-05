@@ -903,6 +903,10 @@ function renderSnippets() {
     'with open("запись.wav", "rb") as audio:\n' +
     "    result = client.audio.transcriptions.create(model=\"whisper-1\", file=audio)\n" +
     "print(result.text)";
+  $("snip-models").textContent = "curl " + origin + "/v1/models" + auth;
+  // Документацию открывает браузер, а заголовок он поставить не умеет: ключ идет
+  // в строке запроса - тем же способом, что и у SSE на /api/events.
+  $("link-docs").href = state.key ? "/api/docs?api_key=" + encodeURIComponent(state.key) : "/api/docs";
 }
 
 /* ------------------------------------------------------------------- логи */

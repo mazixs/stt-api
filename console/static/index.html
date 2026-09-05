@@ -158,6 +158,7 @@
   <section class="module" id="section-connect">
     <div class="module-head"><span class="mono eyebrow">Подключение</span></div>
     <p class="detail">API совместим с OpenAI. Поле <code>prompt</code> движок принимает, но игнорирует — контекст задаётся глоссарием выше.</p>
+    <p class="detail">Схема управляющего API - <a id="link-docs" href="/api/docs" target="_blank" rel="noreferrer">Swagger на /api/docs</a>. Список моделей - <code>GET /v1/models</code>; поле <code>model</code> можно передавать любое, работает развернутая голова.</p>
     <div class="snippet">
       <div class="snippet-head"><span class="mono">curl</span><button class="btn btn-quiet copy" data-target="snip-curl" type="button">Скопировать</button></div>
       <pre id="snip-curl"></pre>
@@ -165,6 +166,10 @@
     <div class="snippet">
       <div class="snippet-head"><span class="mono">Python, openai SDK</span><button class="btn btn-quiet copy" data-target="snip-py" type="button">Скопировать</button></div>
       <pre id="snip-py"></pre>
+    </div>
+    <div class="snippet">
+      <div class="snippet-head"><span class="mono">список моделей</span><button class="btn btn-quiet copy" data-target="snip-models" type="button">Скопировать</button></div>
+      <pre id="snip-models"></pre>
     </div>
   </section>
 

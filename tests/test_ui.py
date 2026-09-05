@@ -184,3 +184,12 @@ async def test_rollback_verdict_stays_on_the_card_that_was_clicked(client_ready)
     assert "clickedTarget" in js
     assert 'status.status === "ready" && clickedTarget' in js
     assert "ROLLBACK.test(status.detail" in js
+
+
+async def test_connection_section_links_api_docs_and_models(client_ready):
+    """Схема управляющего API и список моделей - две ссылки, за которыми чаще всего
+    идут в чужую документацию вместо своей консоли."""
+    html = (await client_ready.get("/")).text
+    js = (await client_ready.get("/static/app.js")).text
+    assert 'id="link-docs"' in html and 'id="snip-models"' in html
+    assert "/api/docs" in js and "/v1/models" in js
