@@ -16,6 +16,7 @@ Behaviour is steered by environment variables:
     FAKE_UNHEALTHY_VARIANT=<head>              only that head never becomes ready
     FAKE_CRASH_AFTER=<seconds>                 serve dies with exit code 1
     FAKE_TRANSCRIPT=<text>                     text returned by transcription endpoints
+    FAKE_ANSI=1                                serve writes its lines coloured, as the real engine does
 """
 
 import argparse
@@ -246,7 +247,15 @@ def cmd_serve(args: argparse.Namespace, argv: list[str]) -> int:
         time.sleep(delay)
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    sys.stderr.write(f"fake-engine listening on {args.host}:{args.port}\n")
+    # Настоящий движок красит вывод и флага отключения цвета не имеет: с FAKE_ANSI
+    # заглушка ведет себя так же, и путь от процесса до консоли проверяется целиком.
+    if os.environ.get("FAKE_ANSI") == "1":
+        sys.stderr.write(
+            f"\x1b[2m2026-09-05T09:27:27Z\x1b[0m \x1b[32m INFO\x1b[0m "
+            f"\x1b[1mfake-engine\x1b[0m listening on {args.host}:{args.port}\n"
+        )
+    else:
+        sys.stderr.write(f"fake-engine listening on {args.host}:{args.port}\n")
     sys.stderr.flush()
     server.serve_forever()
     return 0

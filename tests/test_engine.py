@@ -144,3 +144,21 @@ def test_body_limit_follows_max_upload(console_settings):
         # 500 МБ — это выше собственных 50 МиБ движка: без флага такая настройка
         # молча не работала, хотя README предлагает её поднимать.
         assert limit > 50 * 1024 * 1024 or settings.max_upload_mb < 50
+
+
+def test_engine_log_lines_are_stripped_of_ansi_codes():
+    from console.engine import strip_ansi
+    raw = "\x1b[2m2026-09-05T09:27:27Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[1mrequest\x1b[0m: encoder_inference \x1b[3melapsed_ms\x1b[0m\x1b[2m=\x1b[0m2037"
+    assert strip_ansi(raw) == "2026-09-05T09:27:27Z  INFO request: encoder_inference elapsed_ms=2037"
+
+
+async def test_colourful_engine_output_reaches_the_console_clean(console_settings, monkeypatch):
+    """Логи показываются в <pre>: ESC-коды движка видны там квадратиками, поэтому
+    чистка должна стоять на пути от процесса к консоли, а не только в утилите."""
+    monkeypatch.setenv("FAKE_ANSI", "1")
+    lines: list[str] = []
+    proc = EngineProcess(console_settings, on_log=lines.append)
+    await proc.start(cfg())
+    await wait_for(lambda: any("listening" in line for line in lines), timeout=10)
+    await proc.stop()
+    assert not any("\x1b" in line for line in lines)
