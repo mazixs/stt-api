@@ -193,3 +193,13 @@ async def test_connection_section_links_api_docs_and_models(client_ready):
     js = (await client_ready.get("/static/app.js")).text
     assert 'id="link-docs"' in html and 'id="snip-models"' in html
     assert "/api/docs" in js and "/v1/models" in js
+
+
+async def test_ui_offers_window_concurrency_and_names_its_condition(client_ready):
+    """Селект бесполезен без пула 2: движок берет свободный слот без ожидания, и при
+    пуле 1 параллельность молча ничего не делает. Условие должно стоять в интерфейсе."""
+    html = (await client_ready.get("/")).text
+    js = (await client_ready.get("/static/app.js")).text
+    assert "opt-window-concurrency" in html
+    assert "пул" in html.lower()
+    assert "file_window_concurrency" in js

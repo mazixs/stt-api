@@ -77,6 +77,22 @@ def test_env_example_leaves_engine_settings_commented_out():
     каждая установка стартовала бы с расхождением между .env и выбором пользователя."""
     text = (Path(__file__).parents[1] / ".env.example").read_text(encoding="utf-8")
     for name in ("MODEL_VARIANT", "PUNCTUATION", "ITN", "VAD", "POOL_SIZE",
-                 "HOTWORDS_BOOST", "HOTWORDS_DEFAULT", "INITIAL_CONTEXT"):
+                 "HOTWORDS_BOOST", "HOTWORDS_DEFAULT", "INITIAL_CONTEXT",
+                 "FILE_WINDOW_CONCURRENCY"):
         assert re.search(rf"^# ?{name}=", text, re.M), f"{name} должна быть закомментирована"
         assert not re.search(rf"^{name}=", text, re.M), f"{name} задана явно"
+
+
+def test_window_concurrency_defaults_to_serial_and_reads_from_env(monkeypatch):
+    """Параллельность окон - настройка движка, следовательно приходит и из .env."""
+    assert Settings(_env_file=None).file_window_concurrency == 1
+    monkeypatch.setenv("FILE_WINDOW_CONCURRENCY", "2")
+    s = Settings(_env_file=None)
+    assert s.file_window_concurrency == 2
+    assert "file_window_concurrency" in s.explicit_engine_fields()
+    assert s.engine_config_from_env().file_window_concurrency == 2
+
+
+def test_absurd_window_concurrency_rejected():
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, file_window_concurrency=99)

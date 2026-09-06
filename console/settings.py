@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     # "маскот", то есть исправление, а не выдумка. Задержка не изменилась
     # (docs/research/head-choice-and-wer.md).
     hotwords_default: bool = True
+    # Параллельная обработка окон длинного файла (движок 2.21.0 и новее). 1 -
+    # последовательно; толк появляется только вместе с POOL_SIZE от 2, потому что
+    # движок берёт под второе окно свободный слот пула и никогда его не ждёт.
+    file_window_concurrency: int = Field(default=1, ge=1, le=8)
 
     autostart: bool = True
     max_upload_mb: int = Field(default=150, ge=1)
@@ -76,6 +80,7 @@ class Settings(BaseSettings):
         "pool_size": "pool_size",
         "hotwords_boost": "hotwords_boost",
         "hotwords_default": "hotwords_default",
+        "file_window_concurrency": "file_window_concurrency",
     }
 
     def engine_config_from_env(self) -> "EngineConfig":
@@ -90,6 +95,7 @@ class Settings(BaseSettings):
             pool_size=self.pool_size,
             hotwords_boost=self.hotwords_boost,
             hotwords_default=self.hotwords_default,
+            file_window_concurrency=self.file_window_concurrency,
         )
 
     def explicit_engine_fields(self) -> set[str]:

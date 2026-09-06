@@ -67,3 +67,31 @@ def test_from_dict_ignores_unknown_keys_and_fills_defaults():
     assert restored.variant == "e2e_rnnt"
     assert restored.pool_size == 1
     assert restored.punctuation == "auto"
+
+
+def test_window_concurrency_defaults_to_serial():
+    """Умолчание - последовательная обработка окон, как было до 2.21.0."""
+    assert EngineConfig().file_window_concurrency == 1
+
+
+def test_old_state_without_window_concurrency_loads_as_serial(tmp_path):
+    """Старый data/state.json поля не знает - и должен получить единицу, а не упасть."""
+    path = tmp_path / "state.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "status": "ready",
+                "desired": {"variant": "e2e_rnnt", "pool_size": 1},
+                "last_good": None,
+            }
+        )
+    )
+    loaded = StateFile(path).load()
+    assert loaded.desired.file_window_concurrency == 1
+    assert loaded.desired.variant == "e2e_rnnt"
+
+
+def test_window_concurrency_survives_dict_roundtrip():
+    restored = EngineConfig.from_dict(cfg(file_window_concurrency=2).to_dict())
+    assert restored.file_window_concurrency == 2

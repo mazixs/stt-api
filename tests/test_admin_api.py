@@ -262,3 +262,29 @@ async def test_status_names_the_head_being_deployed(client_stopped, monkeypatch)
         await _sleep(0.1)
     assert ("downloading", "e2e_rnnt") in seen or ("starting", "e2e_rnnt") in seen
     assert seen[-1] == ("ready", None)
+
+
+async def test_deploy_accepts_window_concurrency(client_stopped):
+    response = await client_stopped.post(
+        "/api/deploy",
+        json={"variant": "rnnt", "pool_size": 2, "file_window_concurrency": 2},
+    )
+    assert response.status_code == 202
+    assert response.json()["config"]["file_window_concurrency"] == 2
+    # Дождаться конца развёртывания обязательно: `POST /api/deploy` отвечает 202
+    # сразу, и без ожидания фикстура начнёт разбирать супервизор посреди запуска.
+    await wait_status(client_stopped, "ready")
+
+
+async def test_deploy_rejects_absurd_window_concurrency(client_ready):
+    response = await client_ready.post(
+        "/api/deploy", json={"variant": "rnnt", "file_window_concurrency": 99}
+    )
+    assert response.status_code == 422
+
+
+async def test_status_reports_window_concurrency(client_ready):
+    """Без этого поля консоль не знает, последовательно ли движок читает окна."""
+    body = (await client_ready.get("/api/status")).json()
+    assert body["engine"]["file_window_concurrency"] == 1
+    assert body["defaults"]["file_window_concurrency"] == 1

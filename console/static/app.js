@@ -108,7 +108,7 @@ function afterStatusSettles(name) {
 const FIELD_WORDS = {
   variant: "голова", punctuation: "пунктуация", itn: "числа цифрами", vad: "пропуск тишины",
   pool_size: "одновременных распознаваний", hotwords_boost: "сила подсказки",
-  hotwords_default: "словарь брендов",
+  hotwords_default: "словарь брендов", file_window_concurrency: "окон параллельно",
 };
 const humanValue = (v) => (v === true ? "включен" : v === false ? "выключен" : String(v));
 
@@ -140,6 +140,7 @@ async function deployFromEnv() {
   setSelectValue($("opt-pool"), String(env.pool_size));
   $("opt-hotwords-default").value = String(env.hotwords_default);
   $("opt-boost").value = String(env.hotwords_boost);
+  setSelectValue($("opt-window-concurrency"), String(env.file_window_concurrency));
   await deploy(env.variant);
 }
 
@@ -218,6 +219,7 @@ function applyDefaults(defaults) {
   setSelectValue($("opt-pool"), String(defaults.pool_size));
   $("opt-hotwords-default").value = String(defaults.hotwords_default);
   $("opt-boost").value = String(defaults.hotwords_boost);
+  setSelectValue($("opt-window-concurrency"), String(defaults.file_window_concurrency));
 }
 
 async function refreshStatus() {
@@ -401,6 +403,7 @@ async function deploy(variant) {
         pool_size: Number($("opt-pool").value),
         hotwords_default: $("opt-hotwords-default").value === "true",
         hotwords_boost: Number.isFinite(boost) ? boost : undefined,
+        file_window_concurrency: Number($("opt-window-concurrency").value),
       }),
     });
   } catch (err) {

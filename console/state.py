@@ -24,6 +24,11 @@ class EngineConfig:
     pool_size: int = 1
     hotwords_boost: float = 5.0  # the engine's own default; see console.settings
     hotwords_default: bool = True  # measured, not assumed; see console.settings
+    # Сколько окон длинного файла движок декодирует одновременно (движок 2.21.0 и
+    # новее). 1 - последовательно, как было всегда. Толк появляется только при
+    # `pool_size` от 2: движок берёт свободный слот пула без ожидания, а при пуле 1
+    # свободного слота нет и файл всё равно идёт последовательно.
+    file_window_concurrency: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

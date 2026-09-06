@@ -162,3 +162,24 @@ async def test_colourful_engine_output_reaches_the_console_clean(console_setting
     await wait_for(lambda: any("listening" in line for line in lines), timeout=10)
     await proc.stop()
     assert not any("\x1b" in line for line in lines)
+
+
+def test_window_concurrency_flag_appears_only_when_asked(console_settings):
+    """Флаг передается движку только при значении больше 1.
+
+    При 1 argv обязан остаться прежним: это и поведение по умолчанию, и страховка -
+    откат образа на движок без `--file-window-concurrency` не должен упираться в
+    незнакомый аргумент.
+    """
+    serial = build_argv(console_settings, cfg())
+    assert "--file-window-concurrency" not in serial
+
+    parallel = build_argv(console_settings, cfg(file_window_concurrency=2))
+    assert parallel[parallel.index("--file-window-concurrency") + 1] == "2"
+
+
+def test_window_concurrency_of_one_leaves_argv_byte_identical(console_settings):
+    """Явно заданная единица - это то же самое, что ничего не просить."""
+    assert build_argv(console_settings, cfg(file_window_concurrency=1)) == build_argv(
+        console_settings, cfg()
+    )

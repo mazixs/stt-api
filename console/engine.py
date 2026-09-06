@@ -59,6 +59,12 @@ def build_argv(settings: Settings, cfg: EngineConfig) -> list[str]:
         "--vad-model-dir",
         str(settings.model_dir / "vad"),
     )
+    # Флаг добавляется только когда его действительно просили. Единица — это и
+    # поведение движка по умолчанию, и argv, который был до 2.21.0: тот, кто
+    # параллельность не включал, не должен получить в командной строке аргумент,
+    # которого прежние версии движка не знают.
+    if cfg.file_window_concurrency > 1:
+        argv.extend(["--file-window-concurrency", str(cfg.file_window_concurrency)])
     if cfg.vad:
         argv.append("--vad")
     if cfg.hotwords_default:

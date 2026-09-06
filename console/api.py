@@ -44,6 +44,7 @@ class DeployRequest(BaseModel):
     pool_size: int | None = Field(default=None, ge=1, le=8)
     hotwords_boost: float | None = Field(default=None, ge=0.0, le=50.0)
     hotwords_default: bool | None = None
+    file_window_concurrency: int | None = Field(default=None, ge=1, le=8)
 
     def to_config(self, defaults: EngineConfig) -> EngineConfig:
         return EngineConfig(
@@ -59,6 +60,9 @@ class DeployRequest(BaseModel):
                 defaults.hotwords_default
                 if self.hotwords_default is None
                 else self.hotwords_default
+            ),
+            file_window_concurrency=(
+                self.file_window_concurrency or defaults.file_window_concurrency
             ),
         )
 
@@ -102,6 +106,7 @@ def _status_payload(request: Request) -> dict[str, Any]:
             "pool_size": current.pool_size if current else None,
             "hotwords_boost": current.hotwords_boost if current else None,
             "hotwords_default": current.hotwords_default if current else None,
+            "file_window_concurrency": current.file_window_concurrency if current else None,
             "running": supervisor.process.is_running,
         },
         "defaults": supervisor.default_config().to_dict(),
