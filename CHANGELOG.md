@@ -1,136 +1,180 @@
-# История версий
+# Changelog
 
-Номера семантические: ломающие изменения меняют старшую цифру, новые возможности —
-среднюю, исправления — младшую. Здесь только то, что вошло в версию; почему сделано
-именно так — в [docs/decisions.md](docs/decisions.md), и дважды это не пишется.
-Версия живёт в `console/__init__.py`, откуда её берут и `pyproject.toml`, и схема на
-`/api/openapi.json` (`info.version`).
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
+versions follow [Semantic Versioning](https://semver.org/): breaking changes bump the
+major number, new capabilities the minor, fixes the patch.
 
-## 1.4.0 - 05.09.2026
+This file records *what* shipped in each version. *Why* it was done that way lives in
+[docs/decisions.md](docs/decisions.md) (in Russian) and is not duplicated here.
 
-- **Прогресс развертывания показан там, где нажали.** Полоса, проценты и подписи
-  фаз переехали на карточку той головы, которую разворачивают; блок в шапке убран.
-  Сервер теперь называет цель отдельным полем `deploying`, поэтому при откате полоса
-  стоит на голове, на которую откатываемся, а не на той, что не поднялась. Занятость
-  кнопок берется из статуса, а не из ответа на `POST /api/deploy`
-  ([разбор](docs/decisions.md)).
-- **Логи движка читаются.** Цветной вывод чистится от ESC-кодов на пути в консоль, а
-  дочернему процессу передается `NO_COLOR=1` - движок его уважает, поэтому и
-  `docker logs` стал бесцветным.
-- **В разделе "Подключение" есть ссылка на схему управляющего API** (`/api/docs`) и
-  сниппет со списком моделей (`GET /v1/models`).
+The version number lives in `console/__init__.py`; both `pyproject.toml` and the schema
+at `/api/openapi.json` (`info.version`) read it from there.
 
-Исправлено:
+## [1.4.0] - 2026-09-05
 
-- моргание карточек и потеря прогресса после нажатия "Развернуть";
-- занятость кнопки сбрасывалась раньше, чем заканчивалось развертывание;
-- ошибка и вердикт отката не показывались на нажатой карточке;
-- ESC-коды в разделе "Логи" и в `docker logs` - в обоих местах, где консоль
-  запускает движок: и на `serve`, и на скачивании весов;
-- ложное ощущение конфликта между `.env` и интерфейсом.
+### Added
 
-Изменено:
+- Deployment progress is shown on the card you clicked: the bar, the percentage and the
+  phase labels moved onto the head being deployed. The server now names the target in a
+  separate `deploying` field, so on a rollback the bar sits on the head being rolled
+  back to, not on the one that failed to start.
+- The "Подключение" (Connecting) section now links to the control API schema
+  (`/api/docs`) and includes a snippet for listing models (`GET /v1/models`).
 
-- настройки движка в `.env.example` закомментированы: интерфейс - штатный способ
-  выбора, а `.env` остается для развертывания без интерфейса. Приоритет
-  `data/state.json` над файлом не менялся, менялись образец и документация.
+### Changed
 
-## 1.3.0 - 04.09.2026
+- The progress block in the page header was removed; button busy state is now derived
+  from the status stream instead of the response to `POST /api/deploy`.
+- Engine output is stripped of ANSI escape codes on its way into the console, and the
+  child process is started with `NO_COLOR=1`, which the engine honours - so `docker logs`
+  is plain text too.
+- Engine settings in `.env.example` are commented out: the web interface is the intended
+  way to choose them, while `.env` remains for headless deployment. The precedence of
+  `data/state.json` over the file did not change - only the sample and the documentation
+  did.
 
-- **Настройки наконец доезжают до движка.** Кнопка "Развернуть" посылала пять полей
-  из семи, поэтому глоссарный буст и встроенный словарь молча подставлялись из
-  старого состояния. Теперь форма шлет все семь, а буст и словарь стали видимыми
-  контролами, а не скрытыми настройками.
-- **Встроенный словарь брендов включен по умолчанию** - после A/B на 27 минутах
-  настоящей диктовки, а не по описанию апстрима: одно различие на весь набор, и то
-  исправление ([замер](docs/research/head-choice-and-wer.md)).
-- **Расхождение `.env` с развернутым состоянием больше не молчит.** Оно пишется в лог
-  при старте, отдается в `/api/status` блоком `env`, видно в "Настройках запуска"
-  человеческими словами и применяется кнопкой "Развернуть с настройками `.env`".
-  Фразы `INITIAL_CONTEXT`, которых нет в глоссарии, тоже показываются - с кнопкой
-  "Добавить из .env". Приоритет состояния над файлом не изменился и не изменится
-  ([разбор](docs/decisions.md)).
-- **Головы получили значки по нашему собственному замеру,** а не по внешним таблицам:
-  в лидерборде Шмырева GigaAM v3 нет вовсе, а мультиязычный трек HF русского не
-  содержит. README переписан вокруг этого же: сначала что выбрать, потом сколько ждать.
-- **Замер переехал в репозиторий** - [`bench/`](bench/README.md) гоняет каталог
-  записей через `/api/test`, сам разворачивает нужную конфигурацию и считает WER
-  второго прогона относительно первого. Новых зависимостей нет.
-- **Длинная диктовка измерена от начала до конца.** RTF держится в коридоре
-  0.031-0.040 на записях от 9 секунд до 10 минут: время линейно, потому что движок
-  идет окнами по 24 секунды строго одно за другим. `VAD` проверен по заранее заданному
-  критерию и оставлен выключенным - выигрыш во времени есть, но текст расходится на 3%
-  смысловыми словами, а на короткой диктовке VAD еще и медленнее.
-- **`MAX_UPLOAD_MB` на рабочей установке опущен с 1000 до 500,** потому что гигабайт
-  замерили. Он проходит по времени и тексту (200, 1206.7 с, 355 015 знаков на 9 часах
-  речи), но упирается в память: пик контейнера 2786.7 МиБ при потолке 2861. На 500
-  МиБ - 600.8 с и 1716.0 МиБ. Умолчание в коде осталось 150
-  ([разбор](docs/decisions.md)).
-- **Движок обновлен до 2.20.0.** Файловая загрузка WAV не изменилась ни на байт, а
-  WebM/Opus стал ближе к WAV: у движка новый декодер Opus
-  ([замер](docs/research/head-choice-and-wer.md)).
+### Fixed
 
-## 1.2.0 — 01.09.2026
+- Cards flickering and progress being lost after pressing "Развернуть" (Deploy).
+- Button busy state clearing before deployment had actually finished.
+- Errors and rollback verdicts not appearing on the card that was clicked.
+- ANSI escape codes in the "Логи" (Logs) section and in `docker logs`, in both places
+  where the console starts the engine: `serve` and the weights download.
+- The misleading impression that `.env` and the web interface were in conflict.
 
-- **`MAX_UPLOAD_MB` по умолчанию 150 вместо 50.** Прежний предел не пускал живую
-  диктовку на 73 МиБ — ровно тот сценарий, для которого сервис и сделан. 150 МБ — это
-  около 105 минут MP3 на 192 кбит/с; предел движку консоль задаёт сама.
-- **Проверено на пределе, а не на глаз:** 147 МиБ, 107 минут одним потоком MP3,
-  `e2e_rnnt`, `POOL_SIZE=1` — 227 с работы движка (RTF 0.035), 70 734 символа, пик
-  памяти контейнера 697 МиБ при потолке 3 ГБ. С пиком пересборки графа это не
-  складывается: пока движок поднимается, API отвечает `503` и тело не читает
-  ([разбор](docs/decisions.md)).
-- **Замечено по дороге:** MP3, склеенный через `cat`, движок читает только до конца
-  первого потока ([открытые вопросы](docs/open-questions.md)).
+## [1.3.0] - 2026-09-04
 
-## 1.1.1 — 01.09.2026
+### Added
 
-- **Файл, ровно попавший в `MAX_UPLOAD_MB`, больше не отвергается.** Предел тела у
-  движка совпадал с нашим, а тело больше файла на обёртку multipart, поэтому клиент
-  получал `400 Invalid multipart body` вместо внятного отказа. Консоль теперь задаёт
-  движку предел сама, с запасом в мегабайт.
-- **`MAX_UPLOAD_MB` выше 50 наконец работает.** Раньше движок держал свои 50 МиБ и
-  отвергал загрузку в 60 МБ, хотя наше же сообщение об отказе советует поднять эту
-  переменную ([разбор](docs/decisions.md)).
+- The glossary boost and the built-in dictionary are now visible controls in the deploy
+  form instead of hidden settings.
+- A mismatch between `.env` and the deployed state is now reported: it is logged at
+  startup, returned in `/api/status` as an `env` block, shown in plain words in
+  "Настройки запуска" (Startup settings), and applied with the "Развернуть с настройками
+  `.env`" button. `INITIAL_CONTEXT` phrases missing from the glossary are listed with an
+  "Добавить из .env" (Add from .env) button. State still takes precedence over the file.
+- Head badges in the console now come from our own measurement rather than external
+  tables: Shmyrev's leaderboard has no GigaAM v3, and the multilingual HF track has no
+  Russian. The README was rewritten around the same point: first what to pick, then how
+  long to wait.
+- The benchmark now lives in the repository. [`bench/`](bench/README.md) runs a folder
+  of recordings through `/api/test`, deploys the configuration it needs, and computes
+  the WER of the second pass relative to the first. No new dependencies.
 
-## 1.1.0 — 31.08.2026
+### Changed
 
-Движок обновлён до 2.19.0. Наш код не менялся — меняется то, что получает пользователь.
+- The built-in brand dictionary is enabled by default, after an A/B test on 27 minutes
+  of real dictation rather than on the upstream description: one difference across the
+  whole set, and it was a correction
+  ([measurement](docs/research/head-choice-and-wer.md)).
+- `MAX_UPLOAD_MB` on our production install was lowered from 1000 to 500 because we
+  measured a gigabyte. It passes on time and text (200 files, 1206.7 s, 355,015
+  characters over 9 hours of speech) but strains memory: the container peaked at 2786.7
+  MiB against a 2861 MiB ceiling. At 500 MiB it is 600.8 s and 1716.0 MiB. The default
+  in code remains 150.
+- The engine was updated to 2.20.0. WAV file uploads did not change by a single byte,
+  and WebM/Opus moved closer to WAV thanks to the engine's new Opus decoder
+  ([measurement](docs/research/head-choice-and-wer.md)).
 
-- **Поток почти догнал файловую загрузку.** В движке включён стабильный префикс, и
-  расхождение потокового текста с обычным упало с 7.7% до нуля на коротком примере и с
-  24.2% до 9.7% на длинном
-  ([замер](docs/research/head-choice-and-wer.md)).
-- **Файловая загрузка не изменилась ни на байт** — 16 пар из 16 на двух головах и семи
-  вариантах одного звука, задержка и память в пределах разброса между прогонами.
-- **Причина обновления скучная:** заплатка h2 по RUSTSEC-2026-0258 в HTTP-стеке движка
-  и `symphonia` 0.6.0 → 0.6.1 в декодере звука.
-- **Документация:** версия движка больше не дублируется в README и `.env.example` —
-  закреплённое значение живёт в `docker-compose.yml`. В ручной сценарий добавлена
-  проверка текста WebM/Opus, а не только кода ответа: так нашлась ошибка движка, при
-  которой WebM с заголовком не 48 кГц распознаётся тишиной
-  ([открытые вопросы](docs/open-questions.md)).
+### Fixed
 
-## 1.0.0 — 20.08.2026
+- The deploy form sent five of the seven settings, so the glossary boost and the
+  built-in dictionary were silently taken from the previous state. All seven are now
+  sent.
 
-Первая версия с номером. Счёт начат не с нуля потому, что сервис к этому моменту уже
-работает на проде, а набор возможностей закрыт: дальше правки, а не достройка.
+### Measured
 
-- **OpenAI-совместимый фасад.** `POST /v1/audio/transcriptions` с `response_format`
-  `json`/`text`/`srt`/`vtt`/`verbose_json`, потоковый режим, `GET /v1/models`, проброс
-  родных эндпоинтов движка. Тело загрузки уходит в движок байт в байт, ответ движка не
-  переписывается.
-- **Веб-консоль.** Выбор одной из четырёх голов GigaAM v3 с развёртыванием по кнопке,
-  замер задержки и RTF на каждом запросе, запись с микрофона прямо в браузере, логи и
-  статус живым потоком через SSE.
-- **Глоссарий фразами.** Список правится плашками, применяется без перезапуска движка,
-  и каждая фраза показывает, сумеет ли выбранная голова её написать.
-- **Сторож и откат.** Упавший движок поднимается с задержками 1, 2, 4, 8, 16, 30 с, а
-  после пяти неудач подряд — раз в минуту; не запустившаяся голова откатывается на
-  последнюю рабочую.
-- **Ключ решает всё сразу.** Пустой `API_KEY` — сервис открыт, заданный — закрыто всё,
-  кроме `/health`, включая документацию на `/api/docs`. Там, где браузер не умеет
-  заголовок, ключ принимается как `?api_key=`.
-- **Движок закреплён на 2.18.0**, образ 341 МБ, потолок памяти контейнера 3 ГБ.
-- **Лицензия Apache 2.0**, история репозитория начата одним коммитом при открытии
-  исходников.
+- End-to-end timing of long dictation: RTF stays between 0.031 and 0.040 on recordings
+  from 9 seconds to 10 minutes. Time is linear because the engine walks 24-second
+  windows strictly one after another.
+- `VAD` was evaluated against a criterion fixed in advance and left off: it does save
+  time, but the text diverges by 3% on meaningful words, and on short dictation it is
+  slower as well.
+
+## [1.2.0] - 2026-09-01
+
+### Changed
+
+- `MAX_UPLOAD_MB` now defaults to 150 instead of 50. The old limit rejected a 73 MiB
+  live dictation - exactly the scenario the service exists for. 150 MB is roughly 105
+  minutes of MP3 at 192 kbit/s; the console passes the limit on to the engine itself.
+
+### Measured
+
+- Tested at the limit rather than by eye: 147 MiB, 107 minutes of MP3 in one stream,
+  `e2e_rnnt`, `POOL_SIZE=1` - 227 s of engine time (RTF 0.035), 70,734 characters, peak
+  container memory 697 MiB against a 3 GB ceiling. This does not stack with the graph
+  rebuild peak: while the engine is coming up the API answers `503` and does not read
+  the body.
+- Noted along the way: an MP3 concatenated with `cat` is read by the engine only up to
+  the end of the first stream ([open questions](docs/open-questions.md)).
+
+## [1.1.1] - 2026-09-01
+
+### Fixed
+
+- A file that fit `MAX_UPLOAD_MB` exactly is no longer rejected. The engine's body limit
+  matched ours, while the body is larger than the file by the multipart wrapper, so the
+  client got `400 Invalid multipart body` instead of a clear refusal. The console now
+  sets the engine's limit itself, with a megabyte of headroom.
+- `MAX_UPLOAD_MB` above 50 finally works. Previously the engine kept its own 50 MiB and
+  rejected a 60 MB upload even though our own refusal message advised raising that
+  variable.
+
+## [1.1.0] - 2026-08-31
+
+The engine was updated to 2.19.0. Our code did not change - what the user gets did.
+
+### Changed
+
+- Streaming almost caught up with file upload. The engine's stable prefix is enabled,
+  and the divergence between streamed and regular text fell from 7.7% to zero on a short
+  sample and from 24.2% to 9.7% on a long one
+  ([measurement](docs/research/head-choice-and-wer.md)).
+- File upload did not change by a single byte: 16 pairs out of 16 across two heads and
+  seven variants of the same audio, with latency and memory within run-to-run spread.
+- The reason for the update is dull: the h2 patch for RUSTSEC-2026-0258 in the engine's
+  HTTP stack, and `symphonia` 0.6.0 to 0.6.1 in its audio decoder.
+- Documentation: the engine version is no longer duplicated in the README and
+  `.env.example` - the pinned value lives in `docker-compose.yml`. The manual check now
+  verifies the text of a WebM/Opus result, not just the response code; that is how we
+  found an engine bug where WebM with a header other than 48 kHz is recognized as
+  silence ([open questions](docs/open-questions.md)).
+
+## [1.0.0] - 2026-08-20
+
+The first numbered version. The count does not start at zero because by this point the
+service was already running in production with a closed feature set: from here on it is
+fixes, not construction.
+
+### Added
+
+- OpenAI-compatible facade: `POST /v1/audio/transcriptions` with `response_format`
+  `json`/`text`/`srt`/`vtt`/`verbose_json`, streaming mode, `GET /v1/models`, and
+  passthrough for the engine's native endpoints. The upload body reaches the engine byte
+  for byte and the engine's response is not rewritten.
+- Web console: choice of one of four GigaAM v3 heads deployed by a button, latency and
+  RTF measured on every request, microphone recording in the browser, and live logs and
+  status over SSE.
+- Phrase-based glossary: the list is edited as chips, applied without restarting the
+  engine, and every phrase shows whether the selected head can write it.
+- Watchdog and rollback: a crashed engine is restarted after 1, 2, 4, 8, 16, 30 s and,
+  after five consecutive failures, once a minute; a head that fails to start is rolled
+  back to the last working one.
+- Single-switch authentication: an empty `API_KEY` leaves the service open, a non-empty
+  one closes everything except `/health`, including the docs at `/api/docs`. Where a
+  browser cannot send a header, the key is accepted as `?api_key=`.
+
+### Notes
+
+- The engine is pinned at 2.18.0, the image is 341 MB, and the container memory ceiling
+  is 3 GB.
+- Licensed under Apache 2.0; the repository history begins with a single commit made
+  when the sources were opened.
+
+[1.4.0]: https://github.com/mazixs/stt-api/releases/tag/v1.4.0
+[1.3.0]: https://github.com/mazixs/stt-api/releases/tag/v1.3.0
+[1.2.0]: https://github.com/mazixs/stt-api/releases/tag/v1.2.0
+[1.1.1]: https://github.com/mazixs/stt-api/releases/tag/v1.1.1
+[1.1.0]: https://github.com/mazixs/stt-api/releases/tag/v1.1.0
+[1.0.0]: https://github.com/mazixs/stt-api/releases/tag/v1.0.0

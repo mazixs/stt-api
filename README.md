@@ -1,348 +1,358 @@
-# STT-консоль: локальное распознавание русской речи
+# STT Console: local Russian speech recognition
 
-Свой сервер распознавания речи с OpenAI-совместимым API и веб-консолью: выбрали
-голову GigaAM v3, нажали "Развернуть" - API работает. Рассчитан на диктовку по-русски
-на своей машине, без облака и без GPU.
+Your own speech recognition server with an OpenAI-compatible API and a web console:
+pick a GigaAM v3 head, press "Deploy", and the API is live. Built for Russian
+dictation on your own machine - no cloud, no GPU.
 
-[![Лицензия Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+*Read this in [Russian](README.ru.md). The documents under [`docs/`](docs/) are in
+Russian only.*
+
+[![License Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue)](pyproject.toml)
 [![Docker](https://img.shields.io/badge/docker-compose-blue)](docker-compose.yml)
 
-Внутри - модель [GigaAM v3](https://github.com/salute-developers/GigaAM) от
-SberDevices и движок [gigastt](https://github.com/ekhodzitsky/gigastt): один
-Rust-бинарник на ONNX Runtime, INT8, только CPU. Ни PyTorch, ни ffmpeg, ни CUDA не
-нужны, образ занимает около 340 МБ. Версия движка закреплена в `GIGASTT_TAG`, само
-число - в [`docker-compose.yml`](docker-compose.yml), и здесь оно не дублируется,
-чтобы не разъезжалось.
+Inside are the [GigaAM v3](https://github.com/salute-developers/GigaAM) model by
+SberDevices and the [gigastt](https://github.com/ekhodzitsky/gigastt) engine: a single
+Rust binary on ONNX Runtime, INT8, CPU only. No PyTorch, no ffmpeg, no CUDA; the image
+is about 340 MB. The engine version is pinned in `GIGASTT_TAG`, and the number itself
+lives in [`docker-compose.yml`](docker-compose.yml) - it is not repeated here so the
+two cannot drift apart.
 
-![Веб-консоль](docs/console.png)
+![Web console](docs/console.png)
 
-## Содержание
+## Contents
 
-- [Быстрый старт](#быстрый-старт)
-- [Какую голову выбрать](#какую-голову-выбрать)
-- [Что получилось по скорости](#что-получилось-по-скорости)
-- [Как подключить](#как-подключить)
-- [Глоссарий и словарь брендов](#глоссарий-и-словарь-брендов)
-- [Настройки `.env`](#настройки-env)
-- [Что происходит при падениях](#что-происходит-при-падениях)
-- [Где что лежит](#где-что-лежит)
-- [Если что-то пошло не так](#если-что-то-пошло-не-так)
-- [Как это устроено](#как-это-устроено)
-- [Разработка](#разработка)
-- [Лицензии](#лицензии)
+- [Quick start](#quick-start)
+- [Which head to pick](#which-head-to-pick)
+- [Measured speed](#measured-speed)
+- [Connecting a client](#connecting-a-client)
+- [Glossary and the built-in brand dictionary](#glossary-and-the-built-in-brand-dictionary)
+- [`.env` settings](#env-settings)
+- [What happens when things fail](#what-happens-when-things-fail)
+- [Where things live](#where-things-live)
+- [Troubleshooting](#troubleshooting)
+- [How it works](#how-it-works)
+- [Development](#development)
+- [Licenses](#licenses)
 
-## Быстрый старт
+## Quick start
 
 ```sh
 git clone https://github.com/mazixs/stt-api.git && cd stt-api
-cp .env.example .env          # необязательно: без .env возьмутся значения по умолчанию
+cp .env.example .env          # optional: without .env the defaults apply
 docker compose up -d
 ```
 
-Откройте `http://<адрес-сервера>:8091`, нажмите "Развернуть" на карточке
-**GigaAM v3 RNN-T end-to-end** и дождитесь статуса "готово". Первый раз качается
-~230 МБ весов, дальше они лежат в `models/` и не перекачиваются.
+Open `http://<server-address>:8091`, press "Развернуть" (Deploy) on the
+**GigaAM v3 RNN-T end-to-end** card and wait for the "готово" (ready) status. The
+first run downloads ~230 MB of weights; afterwards they stay in `models/` and are not
+downloaded again.
 
-## Какую голову выбрать
+## Which head to pick
 
-| Голова | Языки | Пунктуация | Наш WER, FLEURS ru | 165 с звука | Значок |
+| Head | Languages | Punctuation | Our WER, FLEURS ru | 165 s of audio | Badge |
 |---|---|---|--:|--:|---|
-| `e2e_rnnt` | ru | встроена в модель | **4.32%** | 6.6 с | лучшая для русского |
-| `ml_ctc_large` | ru, en, kk, ky, uz | отдельным проходом, вручную | 6.25% | 11.2 с | лучшая мультиязычная |
-| `rnnt` | ru | отдельным проходом RuPunct + ITN | 6.56% | 6.3 с | |
-| `ml_ctc` | ru, en, kk, ky, uz | отдельным проходом, вручную | не мерили | **5.8 с** | |
+| `e2e_rnnt` | ru | built into the model | **4.32%** | 6.6 s | best for Russian |
+| `ml_ctc_large` | ru, en, kk, ky, uz | separate pass, manual | 6.25% | 11.2 s | best multilingual |
+| `rnnt` | ru | separate RuPunct + ITN pass | 6.56% | 6.3 s | |
+| `ml_ctc` | ru, en, kk, ky, uz | separate pass, manual | not measured | **5.8 s** | |
 
-WER - наш замер 11.08.2026 на 300 фразах русского FLEURS; время - тот же файл
-диктовки на 16-ядерном настольном CPU, лучшее из трех прогонов.
+WER is our own measurement from 11.08.2026 on 300 Russian FLEURS phrases; the timing
+is one dictation file on a 16-core desktop CPU, best of three runs.
 
-**Берите `e2e_rnnt`.** Она точнее остальных и единственная умеет писать то, чем полон
-глоссарий: заглавные, латиницу, цифры и дефисы. В словаре `rnnt` только 32 строчные
-кириллические буквы, поэтому "OpenWhispr" туда не проходит вовсе. Из 140 фраз нашего
-боевого глоссария `e2e_rnnt` пишет все 140.
+**Take `e2e_rnnt`.** It is more accurate than the rest and the only one able to write
+what a glossary is full of: capitals, Latin script, digits and hyphens. The `rnnt`
+vocabulary holds only 32 lowercase Cyrillic letters, so "OpenWhispr" cannot be
+produced at all. Out of the 140 phrases in our production glossary, `e2e_rnnt` can
+write all 140.
 
-**`ml_ctc_large` - если нужны пять языков.** Вдвое медленнее, на первом запуске берет
-2.5 ГиБ памяти и пишет так же голо, как `rnnt`.
+**Take `ml_ctc_large` if you need five languages.** It is twice as slow, takes 2.5 GiB
+of memory on the first run, and writes just as bare as `rnnt`.
 
-**С внешними лидербордами это не соотносится никак, и это проверено:** у Шмырева
-GigaAM v3 нет вовсе (таблица не обновлялась с 14.09.2025), мультиязычный трек HF Open
-ASR Leaderboard русского не содержит. Поэтому значки в консоли стоят по нашему замеру
-([разбор](docs/research/head-choice-and-wer.md)).
+**None of this maps onto external leaderboards, and we checked:** Shmyrev's leaderboard
+has no GigaAM v3 at all (the table has not been updated since 14.09.2025), and the
+multilingual track of the HF Open ASR Leaderboard contains no Russian. That is why the
+badges in the console come from our own measurement
+([write-up, in Russian](docs/research/head-choice-and-wer.md)).
 
-## Что получилось по скорости
+## Measured speed
 
-Замеры на 16-ядерном настольном CPU, голова `e2e_rnnt`, `POOL_SIZE=1`, лучшее из
-трех прогонов, 04.09.2026:
+Measured on a 16-core desktop CPU, head `e2e_rnnt`, `POOL_SIZE=1`, best of three runs,
+04.09.2026:
 
-| Запись | Ответ | Быстрее речи |
+| Recording | Response | Faster than speech |
 |---|--:|--:|
-| 9 с | 0.30 с | x31 |
-| 36 с | 1.38 с | x26 |
-| 71 с | 2.52 с | x28 |
-| 2.8 мин | 6.32 с | x26 |
-| 5.5 мин | 12.97 с | x25 |
-| 10.3 мин | 24.53 с | x25 |
+| 9 s | 0.30 s | x31 |
+| 36 s | 1.38 s | x26 |
+| 71 s | 2.52 s | x28 |
+| 2.8 min | 6.32 s | x26 |
+| 5.5 min | 12.97 s | x25 |
+| 10.3 min | 24.53 s | x25 |
 
-На боевой машине с восемью ядрами то же самое выходит вдвое дороже: RTF около 0.05,
-следовательно шесть минут диктовки честно стоят примерно 19 секунд ожидания.
+On our eight-core production machine the same work costs twice as much: RTF around
+0.05, so six minutes of dictation honestly cost about 19 seconds of waiting.
 
-**Время растет линейно, и это устройство, а не дефект.** Запись длиннее 30 секунд
-движок режет на окна по 24 секунды с перекрытием 2 секунды и проходит их строго одно
-за другим. Ускорить это можно было бы только параллельной обработкой окон, которой в
-движке нет. Пропуск тишины (`VAD=1`) мы проверили: на записях 3-10 минут он экономит
-20-30% времени, но меняет 3% слов, а на короткой диктовке оказывается медленнее, чем
-без него, - поэтому остается выключенным
-([замер](docs/research/head-choice-and-wer.md)).
+**Time grows linearly, and that is the design, not a defect.** Anything longer than 30
+seconds is cut by the engine into 24-second windows with a 2-second overlap and
+processed strictly one after another. The only way to speed that up would be
+processing windows in parallel, which the engine does not do. We tested silence
+skipping (`VAD=1`): on 3-10 minute recordings it saves 20-30% of the time but changes
+3% of the words, and on short dictation it is actually slower - so it stays off
+([measurement, in Russian](docs/research/head-choice-and-wer.md)).
 
-Накладные расходы самой консоли - от 5 до 25 миллисекунд, то есть 0.1% на
-десятиминутном файле. Ваш сервер, скорее всего, медленнее нашего, поэтому консоль
-**измеряет задержку сама** на каждом запросе и показывает ее в разделе "Статус".
+The console's own overhead is 5 to 25 milliseconds, i.e. 0.1% on a ten-minute file.
+Your server is probably slower than ours, so the console **measures latency itself** on
+every request and shows it in the "Статус" (Status) section.
 
-**Клиент добавляет свое время сверх нашего.** OpenWhispr для своего `base_url` не
-стримит и по умолчанию прогоняет готовый текст через LLM-очистку
-([разбор](docs/product.md)).
+**Your client adds its own time on top of ours.** OpenWhispr does not stream to a
+custom `base_url` and by default pushes the finished text through an LLM cleanup pass
+([write-up, in Russian](docs/product.md)).
 
-## Как подключить
+## Connecting a client
 
-API совместим с OpenAI, поэтому подходит любой клиент, умеющий `base_url`:
+The API is OpenAI-compatible, so any client that accepts a `base_url` will work:
 
 ```sh
-curl -X POST http://<сервер>:8091/v1/audio/transcriptions \
+curl -X POST http://<server>:8091/v1/audio/transcriptions \
   -F model=whisper-1 \
-  -F file=@запись.wav
+  -F file=@recording.wav
 ```
 
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://<сервер>:8091/v1", api_key="не-нужен")
-with open("запись.wav", "rb") as audio:
+client = OpenAI(base_url="http://<server>:8091/v1", api_key="not-needed")
+with open("recording.wav", "rb") as audio:
     print(client.audio.transcriptions.create(model="whisper-1", file=audio).text)
 ```
 
-Поддерживается: `response_format` = `json`, `text`, `srt`, `vtt`, `verbose_json`;
-`timestamp_granularities[]` = `word` / `segment`; `stream=true` (SSE); форматы аудио
-WAV, MP3, M4A/AAC, OGG/Vorbis, OGG/Opus, FLAC и WebM/Opus. Поле `model` можно
-передавать любое - работает та голова, которую вы развернули.
+Supported: `response_format` = `json`, `text`, `srt`, `vtt`, `verbose_json`;
+`timestamp_granularities[]` = `word` / `segment`; `stream=true` (SSE); audio formats
+WAV, MP3, M4A/AAC, OGG/Vorbis, OGG/Opus, FLAC and WebM/Opus. The `model` field may hold
+anything - the head you deployed is the one that runs.
 
-Не поддерживается: `/v1/audio/translations` (GigaAM не переводит речь) и поле
-`prompt` - контекст задается глоссарием.
+Not supported: `/v1/audio/translations` (GigaAM does not translate speech) and the
+`prompt` field - context is set through the glossary.
 
-Две оговорки, обе проверены замером. Если делаете WebM сами, просите `ffmpeg` про
-частоту явно (`-ar 48000` перед `-c:a libopus`): движок берет ее из контейнера, и файл
-с заголовком не 48 кГц вернет код 200 и пустой текст. А `stream=true` на загруженном
-файле почти не дает промежуточного текста - движок получил весь звук сразу; живой
-текст требует живого звука, для него проброшен родной `/v1/ws`
-([разбор](docs/open-questions.md)).
+Two caveats, both confirmed by measurement. If you produce WebM yourself, tell `ffmpeg`
+the sample rate explicitly (`-ar 48000` before `-c:a libopus`): the engine reads it from
+the container, and a file whose header says anything other than 48 kHz returns code 200
+and empty text. And `stream=true` on an uploaded file yields almost no intermediate
+text - the engine received all the audio at once; live text needs live audio, and for
+that the engine's native `/v1/ws` is proxied through
+([write-up, in Russian](docs/open-questions.md)).
 
-### Что торчит наружу
+### What is exposed
 
-Ключ решает все сразу: пустой `API_KEY` - сервис открыт целиком, заданный - закрыто
-все, кроме `/health`.
+The key is all-or-nothing: an empty `API_KEY` leaves the service fully open, a
+non-empty one closes everything except `/health`.
 
-| Путь | Под ключом | Что делает |
+| Path | Behind the key | What it does |
 |---|---|---|
-| `POST /v1/audio/transcriptions` | да | Распознавание, OpenAI-совместимое |
-| `GET /v1/models` | да | Четыре головы плюс `whisper-1` для клиентов с зашитым именем |
-| `POST /v1/audio/translations` | да | Всегда `400`: GigaAM не переводит речь |
-| `GET/POST/DELETE /v1/...` | да | Проброс остальных родных эндпоинтов движка |
-| `GET /api/status`, `/api/models`, `/api/glossary` | да | Данные для веб-консоли |
-| `POST /api/deploy`, `/api/stop`, `/api/glossary` | да | Развернуть голову, остановить движок, применить глоссарий |
-| `POST /api/test` | да | Разовое распознавание с замером времени и RTF |
-| `GET /api/events` | да | SSE: статус, прогресс скачивания, логи |
-| `GET /api/docs`, `/api/openapi.json` | да | Swagger UI и схема управляющего API |
-| `GET /health` | нет | Живость самой консоли: иначе healthcheck Docker перезапускал бы исправный контейнер |
+| `POST /v1/audio/transcriptions` | yes | Recognition, OpenAI-compatible |
+| `GET /v1/models` | yes | Four heads plus `whisper-1` for clients with a hardcoded name |
+| `POST /v1/audio/translations` | yes | Always `400`: GigaAM does not translate speech |
+| `GET/POST/DELETE /v1/...` | yes | Passthrough for the engine's remaining native endpoints |
+| `GET /api/status`, `/api/models`, `/api/glossary` | yes | Data for the web console |
+| `POST /api/deploy`, `/api/stop`, `/api/glossary` | yes | Deploy a head, stop the engine, apply the glossary |
+| `POST /api/test` | yes | One-off recognition with timing and RTF |
+| `GET /api/events` | yes | SSE: status, download progress, logs |
+| `GET /api/docs`, `/api/openapi.json` | yes | Swagger UI and the schema of the control API |
+| `GET /health` | no | Liveness of the console itself: otherwise Docker's healthcheck would restart a healthy container |
 
-Ключ передается как `Authorization: Bearer <ключ>`, а где заголовок послать нельзя -
-как `?api_key=<ключ>`. Таких мест два, и оба браузерные: `EventSource` на
-`/api/events` и переход по ссылке на `/api/docs`. Плата обычная для ключа в адресе:
-он остается в истории браузера и в логах прокси.
+The key is sent as `Authorization: Bearer <key>`, and where a header cannot be sent, as
+`?api_key=<key>`. There are exactly two such places, both in the browser: `EventSource`
+on `/api/events` and following a link to `/api/docs`. The usual price of a key in a URL
+applies: it stays in browser history and in proxy logs.
 
-## Глоссарий и словарь брендов
+## Glossary and the built-in brand dictionary
 
-Имена, термины и названия, которые должны распознаваться правильно, задаются прямо в
-веб-консоли, а при развертывании без интерфейса - строкой `INITIAL_CONTEXT` в `.env`
-(в образце она закомментирована, ее нужно раскомментировать):
+Names, terms and titles that must be recognized correctly are entered directly in the
+web console, or - for a headless deployment - through `INITIAL_CONTEXT` in `.env` (it
+is commented out in the sample and has to be uncommented):
 
 ```
 INITIAL_CONTEXT=АйМоп, GigaAM|8, Петр Иванович Сидоров
 ```
 
-Разделители - запятая или перевод строки, вес фразы после вертикальной черты, общая
-сила подсказки - `HOTWORDS_BOOST`. Это hotword-биасинг: подсказка работает на этапе
-декодирования, а не правкой готового текста. Правки применяются без перезапуска,
-движок перечитывает список на месте. Импорт, экспорт и добавление по одной фразе - в
-консоли; копию стоит забирать время от времени, список живет в томе `data/` и другого
-экземпляра у него нет.
+Separators are a comma or a newline, a phrase weight follows a vertical bar, and the
+overall strength of the hint is `HOTWORDS_BOOST`. This is hotword biasing: the hint
+works during decoding, not as a post-edit of finished text. Edits apply without
+restarting the engine, which re-reads the list in place. Import, export and adding a
+single phrase live in the console; take a copy from time to time, since the list lives
+in the `data/` volume and has no second home.
 
-**Фразу выбрасывают, если голова не может ее написать.** Регистр тут ни при чем,
-движок сам пробует фразу и как написана, и строчными; а вот чужой алфавит не спасает
-ничто - `OpenWhispr` недостижим для `rnnt`. Консоль показывает такие фразы
-зачеркнутыми, то есть поименно.
+**A phrase is dropped if the head cannot write it.** Case is not the issue - the engine
+tries the phrase both as written and in lowercase - but a foreign alphabet is fatal:
+`OpenWhispr` is unreachable for `rnnt`. The console strikes such phrases through, by
+name.
 
-**Чего от глоссария ждать не стоит: точного написания английских терминов.** Правило,
-проверенное на живой записи: подсказка дотягивает почти угаданное и не выдумывает
-неуслышанное - `H20` она поправила в `H200`, а `standart Bird` в `Thunderbird` не
-превратила ни при каком бусте ([разбор](docs/research/head-choice-and-wer.md)).
+**What not to expect from the glossary: exact spelling of English terms.** The rule, as
+confirmed on a live recording: a hint finishes what was almost recognized and does not
+invent what was not heard - it corrected `H20` into `H200`, but never turned
+`standart Bird` into `Thunderbird` at any boost
+([write-up, in Russian](docs/research/head-choice-and-wer.md)).
 
-**`HOTWORDS_DEFAULT=1` включен по умолчанию.** Это встроенный словарь движка: 30
-бытовых брендов строчной кириллицей (эпл, айфон, яндекс, вайлдберриз). Технической
-лексике он не помогает - для нее и есть глоссарий выше. На 27 минутах настоящей
-диктовки словарь изменил одно слово из 2654, и в сторону правильного написания
-([замер](docs/research/head-choice-and-wer.md)).
+**`HOTWORDS_DEFAULT=1` is on by default.** This is the engine's built-in dictionary: 30
+consumer brands in lowercase Cyrillic (эпл, айфон, яндекс, вайлдберриз). It does not
+help with technical vocabulary - that is what the glossary above is for. Across 27
+minutes of real dictation the dictionary changed one word out of 2654, and changed it
+toward the correct spelling
+([measurement, in Russian](docs/research/head-choice-and-wer.md)).
 
-**`INITIAL_CONTEXT` читается один раз**, при создании файла глоссария, - дальше
-правки в консоли сильнее. Фразы из `.env`, которых в списке нет, консоль покажет
-рядом с глоссарием и предложит кнопку "Добавить из .env". Автоматически они не
-доливаются намеренно: удаленная в консоли фраза не должна возвращаться после
-перезапуска.
+**`INITIAL_CONTEXT` is read once**, when the glossary file is created - after that,
+edits in the console win. Phrases from `.env` that are missing from the list are shown
+next to the glossary with an "Добавить из .env" (Add from .env) button. They are
+deliberately not merged automatically: a phrase deleted in the console must not come
+back after a restart.
 
-## Настройки `.env`
+## `.env` settings
 
-Полный список с пояснениями - в [`.env.example`](.env.example). Главное:
+The full list with explanations is in [`.env.example`](.env.example). The essentials:
 
-Настройки консоли: читаются при старте контейнера, в консоли не выбираются.
+Console settings: read when the container starts, not selectable in the console.
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `HOST_PORT` | `8091` | Порт на сервере |
-| `API_KEY` | пусто | Если задан - нужен `Authorization: Bearer <ключ>` |
-| `AUTOSTART` | `1` | Поднимать последнюю модель при старте контейнера |
-| `MAX_UPLOAD_MB` | `150` | Лимит размера файла; движку передается он же, с запасом |
-| `HF_TOKEN` | пусто | Не нужен: веса берутся с GitHub Releases |
-| `LOG_LEVEL` | `info` | Подробность логов |
+| `HOST_PORT` | `8091` | Port on the host |
+| `API_KEY` | empty | If set, `Authorization: Bearer <key>` is required |
+| `AUTOSTART` | `1` | Bring up the last model when the container starts |
+| `MAX_UPLOAD_MB` | `150` | File size limit; the engine is given the same value, with headroom |
+| `HF_TOKEN` | empty | Not needed: weights come from GitHub Releases |
+| `LOG_LEVEL` | `info` | Log verbosity |
 
-Настройки движка: выбираются в консоли; в `.env` они закомментированы и нужны
-только для развертывания без интерфейса.
+Engine settings: selected in the console; in `.env` they are commented out and are only
+needed for a headless deployment.
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `INITIAL_CONTEXT` | пусто | Глоссарий |
-| `MODEL_VARIANT` | `rnnt` | Голова |
-| `PUNCTUATION` / `ITN` | `auto` | Пунктуация и числа цифрами |
-| `HOTWORDS_BOOST` | `5.0` | Сила подсказки глоссария |
-| `HOTWORDS_DEFAULT` | `1` | Встроенный словарь из 30 бытовых брендов |
-| `VAD` | `0` | Пропуск тишины: экономит время на длинных записях, меняет текст |
-| `POOL_SIZE` | `1` | 1 = минимальная задержка, лучшее для диктовки |
-| `FILE_WINDOW_CONCURRENCY` | `1` | Окон длинного файла одновременно; работает только при `POOL_SIZE` от 2 |
+| `INITIAL_CONTEXT` | empty | Glossary |
+| `MODEL_VARIANT` | `rnnt` | Head |
+| `PUNCTUATION` / `ITN` | `auto` | Punctuation and numbers as digits |
+| `HOTWORDS_BOOST` | `5.0` | Strength of the glossary hint |
+| `HOTWORDS_DEFAULT` | `1` | Built-in dictionary of 30 consumer brands |
+| `VAD` | `0` | Silence skipping: saves time on long recordings, changes the text |
+| `POOL_SIZE` | `1` | 1 = minimum latency, best for dictation |
+| `FILE_WINDOW_CONCURRENCY` | `1` | Windows of a long file processed at once; only works with `POOL_SIZE` of 2 or more |
 
-**Выбор головы живет в состоянии, а не в `.env`.** Что развернуто, хранится в
-`data/state.json`, и после первого развертывания это сильнее `.env`: иначе выбранная
-в консоли голова откатывалась бы к значению из файла после каждого перезапуска
-контейнера. В `.env` строки настроек движка закомментированы и нужны только для
-первого старта без интерфейса. Если их раскомментировать и они разойдутся с выбором в
-консоли, консоль покажет расхождение и предложит применить `.env`.
+**The choice of head lives in the state, not in `.env`.** What is deployed is stored in
+`data/state.json`, and after the first deployment that beats `.env`: otherwise the head
+you picked in the console would revert to the file's value on every container restart.
+The engine lines in `.env` are commented out and are only needed for a first, headless
+start. Uncomment them and let them diverge from the console's choice, and the console
+will report the mismatch and offer to apply `.env`.
 
-Молчать об этом консоль не будет. Расхождение попадает в лог при старте, видно в
-разделе "Настройки запуска" человеческими словами и применяется кнопкой "Развернуть с
-настройками `.env`". Что развернуто на самом деле, проверяется командой
-`ps -eo args | grep "gigastt serve"`, а не эндпоинтом статуса: статус показывает
-желаемое.
+The console will not stay quiet about it. The mismatch is logged at startup, shown in
+plain words in the "Настройки запуска" (Startup settings) section, and applied by the
+"Развернуть с настройками `.env`" (Deploy with `.env` settings) button. What is
+actually running is verified with `ps -eo args | grep "gigastt serve"`, not with the
+status endpoint: the status shows intent.
 
-## Что происходит при падениях
+## What happens when things fail
 
-| Что упало | Что делает сервис |
+| What failed | What the service does |
 |---|---|
-| Процесс движка | Консоль поднимает его заново с задержкой 1, 2, 4, 8, 16, 30 с; после пяти неудач подряд - раз в минуту |
-| Контейнер целиком | Docker перезапускает (`restart: unless-stopped`), конфигурация читается из `data/state.json` |
-| Скачивание весов оборвалось | Два повтора, потом понятная ошибка и кнопка для новой попытки. Работающая модель не останавливается |
-| Новая голова не запустилась | Автоматический откат на предыдущую рабочую |
+| The engine process | The console restarts it after 1, 2, 4, 8, 16, 30 s; after five failures in a row, once a minute |
+| The whole container | Docker restarts it (`restart: unless-stopped`) and the configuration is read from `data/state.json` |
+| A weights download broke off | Two retries, then a clear error and a button to try again. A working model is not stopped |
+| A new head failed to start | Automatic rollback to the previous working one |
 
-Запросы, попавшие точно в момент падения, теряются - клиент должен повторить. Пока
-движок не готов, API отвечает `503` с заголовком `Retry-After`.
+Requests that land exactly at the moment of a crash are lost - the client must retry.
+While the engine is not ready, the API answers `503` with a `Retry-After` header.
 
-Контейнеру заданы потолок памяти в 3 ГБ и ротация логов. Потолок посчитан не по
-рабочим ~120 МиБ, а по самому тяжелому мигу - пересборке графа после смены головы
-(2538 МиБ у `ml_ctc_large`). Обоснование - в комментариях `docker-compose.yml` и в
-[docs/decisions.md](docs/decisions.md).
+The container has a 3 GB memory ceiling and log rotation. The ceiling is sized not by
+the ~120 MiB of normal operation but by the heaviest moment - rebuilding the graph after
+a head change (2538 MiB for `ml_ctc_large`). The reasoning is in the comments of
+`docker-compose.yml` and in [docs/decisions.md](docs/decisions.md) (in Russian).
 
-## Где что лежит
+## Where things live
 
-| Путь | Что |
+| Path | What |
 |---|---|
-| `models/` | Веса моделей: голова (~230 МБ), пунктуация (~31 МБ), диаризация (~27 МБ) |
-| `models/optimized_cache/` | Оптимизированные графы ONNX, ~300 МБ на голову. Убираются командой движка `cache-gc` |
-| `data/state.json` | Последняя развернутая конфигурация |
-| `data/hotwords.txt` | Глоссарий в формате движка |
-| `data/metrics.json` | Счетчики консоли: файлы, секунды звука, время распознавания |
+| `models/` | Model weights: head (~230 MB), punctuation (~31 MB), diarization (~27 MB) |
+| `models/optimized_cache/` | Optimized ONNX graphs, ~300 MB per head. Removed with the engine's `cache-gc` command |
+| `data/state.json` | The last deployed configuration |
+| `data/hotwords.txt` | The glossary in the engine's format |
+| `data/metrics.json` | Console counters: files, seconds of audio, recognition time |
 
-Наружу открыт только порт консоли. Движок слушает `127.0.0.1:9876` внутри
-контейнера, поэтому попасть в него можно лишь через консоль, которая проверяет ключ.
+Only the console's port is exposed. The engine listens on `127.0.0.1:9876` inside the
+container, so the only way in is through the console, which checks the key.
 
-## Если что-то пошло не так
+## Troubleshooting
 
-**Скачивание обрывается на середине.** Сервис делает два повтора сам. Если не
-помогает, скачайте четыре файла весов головы руками с
-[релиза движка](https://github.com/ekhodzitsky/gigastt/releases) и положите в
-`models/` - консоль увидит их и запустится без скачивания.
+**The download breaks off halfway.** The service retries twice on its own. If that does
+not help, download the head's four weight files by hand from the
+[engine release](https://github.com/ekhodzitsky/gigastt/releases) and put them into
+`models/` - the console will see them and start without downloading.
 
-**Кнопка "Записать с микрофона" не работает.** Браузеры дают микрофон только на
-`localhost` или по HTTPS: откройте консоль через SSH-туннель
-(`ssh -L 8091:localhost:8091 сервер`). Распознавание файлов работает всегда.
+**The "Записать с микрофона" (Record from microphone) button does nothing.** Browsers
+grant microphone access only on `localhost` or over HTTPS: open the console through an
+SSH tunnel (`ssh -L 8091:localhost:8091 server`). File recognition always works.
 
-**Логи.** `docker compose logs -f`, там же вывод движка. Последние строки видны в
-консоли в разделе "Логи".
+**Logs.** `docker compose logs -f`, which also carries the engine's output. The last
+lines are visible in the console's "Логи" (Logs) section.
 
-**Занят порт.** Поменяйте `HOST_PORT` в `.env` и `docker compose up -d`.
+**The port is taken.** Change `HOST_PORT` in `.env` and run `docker compose up -d`.
 
-**`400 Invalid multipart body` на большом файле.** Так отвечали версии до 1.1.1.
-Теперь консоль сама задает движку предел с запасом и отказывает текстом про размер
-([разбор](docs/decisions.md)).
+**`400 Invalid multipart body` on a large file.** That was the behavior before 1.1.1.
+The console now sets the engine's limit itself, with headroom, and refuses with a
+message about the size ([write-up, in Russian](docs/decisions.md)).
 
-## Как это устроено
+## How it works
 
-Консоль владеет процессом движка, а не соседствует с ним: `gigastt serve` - ее
-дочерний процесс на `127.0.0.1:9876`, наружу не публикуется. Своей сборки Rust в
-проекте нет, бинарник берется из образа апстрима.
+The console owns the engine process rather than sitting next to it: `gigastt serve` is
+its child process on `127.0.0.1:9876` and is never published. There is no Rust build in
+this project; the binary comes from the upstream image.
 
-| Файл | За что отвечает |
+| File | Responsibility |
 |---|---|
-| `console/main.py` | Сборка приложения: `Settings` -> `Supervisor` -> FastAPI, три роутера и статика с отпечатком содержимого в ссылках |
-| `console/supervisor.py` | Машина состояний (`stopped` / `downloading` / `starting` / `ready` / `error`), откат на последнюю рабочую конфигурацию, сторож упавшего процесса, расхождение с `.env` |
-| `console/engine.py` | Жизненный цикл `gigastt serve`: единственное место, где собираются аргументы движка |
-| `console/downloader.py` | Скачивание весов командой самого движка, прогресс и контрольные суммы - его же |
-| `console/api.py` | Управляющий API консоли под `/api`, включая блок `env` в статусе |
-| `console/proxy.py` | Фасад OpenAI: ключ, лимит размера, понятные ошибки при неготовности, замер времени. Тело загрузки уходит в движок байт в байт |
-| `console/auth.py` | Проверка `Authorization: Bearer`, выключена при пустом `API_KEY` |
-| `console/state.py` | `data/state.json`, запись атомарная: контейнер, убитый на середине, не найдет обрывок |
-| `console/catalog.py` | Четыре головы: названия, размеры, файлы весов и значки по нашему замеру |
-| `console/vocab.py` | Читает словарь головы с диска и отвечает, какие фразы глоссария движок сможет написать |
-| `console/glossary.py` | Разбор списка фраз в формат движка (`data/hotwords.txt`) |
-| `console/events.py` | Шина событий, из которой берется SSE `/api/events` |
-| `console/metrics.py` | Счетчики в `data/metrics.json` |
-| `console/wavinfo.py`, `console/webminfo.py` | Длительность WAV и WebM/Opus без декодирования - только ради RTF, звук не трогают |
-| `console/static/` | Фронтенд без сборки и зависимостей. Запись с микрофона собирается в WAV прямо в браузере, поэтому в образе не нужен ffmpeg |
+| `console/main.py` | Application assembly: `Settings` -> `Supervisor` -> FastAPI, three routers, and static files with a content fingerprint in their URLs |
+| `console/supervisor.py` | State machine (`stopped` / `downloading` / `starting` / `ready` / `error`), rollback to the last working configuration, watchdog for a crashed process, `.env` mismatch |
+| `console/engine.py` | Lifecycle of `gigastt serve`: the only place where engine arguments are assembled |
+| `console/downloader.py` | Weight downloads through the engine's own command, with its progress and checksums |
+| `console/api.py` | The console's control API under `/api`, including the `env` block in the status |
+| `console/proxy.py` | The OpenAI facade: key, size limit, clear errors when not ready, timing. The upload body reaches the engine byte for byte |
+| `console/auth.py` | `Authorization: Bearer` check, disabled when `API_KEY` is empty |
+| `console/state.py` | `data/state.json`, written atomically: a container killed mid-write leaves no fragment behind |
+| `console/catalog.py` | The four heads: names, sizes, weight files, and badges from our own measurement |
+| `console/vocab.py` | Reads a head's vocabulary from disk and answers which glossary phrases the engine can write |
+| `console/glossary.py` | Parses the phrase list into the engine's format (`data/hotwords.txt`) |
+| `console/events.py` | The event bus behind SSE on `/api/events` |
+| `console/metrics.py` | Counters in `data/metrics.json` |
+| `console/wavinfo.py`, `console/webminfo.py` | Duration of WAV and WebM/Opus without decoding - only for RTF, the audio is untouched |
+| `console/static/` | Frontend with no build step and no dependencies. Microphone recordings are assembled into WAV in the browser, which is why the image needs no ffmpeg |
 
-## Разработка
+## Development
 
 ```sh
-uv sync          # окружение
-uv run pytest    # тесты; движок подменяется заглушкой, ничего не качается
+uv sync          # environment
+uv run pytest    # tests; the engine is stubbed out, nothing is downloaded
 ```
 
-Поднять сервис на своей машине лучше через наложение - тогда контейнер не будет
-воскресать сам после перезагрузки и не спутается с боевым по имени:
+Run the service on your own machine through the overlay - that way the container will
+not resurrect itself after a reboot and will not collide with production by name:
 
 ```sh
 cp .env.local.example .env.local
 docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
-docker compose -f docker-compose.yml -f docker-compose.local.yml down    # не забыть
+docker compose -f docker-compose.yml -f docker-compose.local.yml down    # do not forget
 ```
 
-Версии помечены тегами `vX.Y.Z`, что в них вошло - в [CHANGELOG.md](CHANGELOG.md).
-Номер лежит в `console/__init__.py`, оттуда его берут и `pyproject.toml`, и схема на
-`/api/openapi.json`.
+Releases are tagged `vX.Y.Z`; what went into each is in [CHANGELOG.md](CHANGELOG.md).
+The number lives in `console/__init__.py`, and both `pyproject.toml` and the schema at
+`/api/openapi.json` read it from there.
 
-Замер новой головы или новой версии движка - [`bench/`](bench/README.md): два прогона
-`run` и одна команда `compare` дают время и WER второго прогона относительно первого.
+To measure a new head or a new engine version, use [`bench/`](bench/README.md): two
+`run` passes and one `compare` command give you the timing and the WER of the second
+pass relative to the first.
 
-Ручной сценарий проверки на живом движке - [`docs/manual-smoke.md`](docs/manual-smoke.md).
-Остальные документы - [`docs/`](docs/): [о продукте](docs/product.md),
-[технические решения](docs/decisions.md),
-[выбор головы и замеры](docs/research/head-choice-and-wer.md),
-[открытые вопросы](docs/open-questions.md).
+The manual check against a live engine is [`docs/manual-smoke.md`](docs/manual-smoke.md).
+The remaining documents live in [`docs/`](docs/) and are written in Russian:
+[product scope](docs/product.md), [technical decisions](docs/decisions.md),
+[head choice and measurements](docs/research/head-choice-and-wer.md),
+[open questions](docs/open-questions.md).
 
-## Лицензии
+## Licenses
 
-Код консоли - Apache 2.0 ([LICENSE](LICENSE)). Движок gigastt - MIT. Веса
-GigaAM v3 - MIT.
+The console's code is Apache 2.0 ([LICENSE](LICENSE)). The gigastt engine is MIT. The
+GigaAM v3 weights are MIT.

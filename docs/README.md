@@ -7,7 +7,6 @@
 | [research/head-choice-and-wer.md](research/head-choice-and-wer.md) | Выбор головы, замеры WER, наши ошибки в методе |
 | [open-questions.md](open-questions.md) | Что осталось незакрытым и что с этим делать |
 | [manual-smoke.md](manual-smoke.md) | Ручной сценарий проверки на живом движке |
-| [superpowers/](superpowers/) | Исходная спека и план работ, историческое |
 
-Как пользоваться сервисом — в корневом [README](../README.md). Он намеренно
+Как пользоваться сервисом — в корневом [README](../README.ru.md). Он намеренно
 короткий: инструкции там, объяснения здесь, и одно и то же не пишется дважды.

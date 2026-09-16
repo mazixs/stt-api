@@ -27,6 +27,9 @@ dist/
 .mypy_cache/
 .playwright-mcp/
 .claude/
+AGENTS.md
+CLAUDE.md
+bench/
 .idea/
 .vscode/
 tests/
