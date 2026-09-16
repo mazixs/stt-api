@@ -218,6 +218,187 @@ def command_run(args: argparse.Namespace) -> int:
     return 0
 
 
+# ------------------------------------------------------------------------- швы
+
+"""Цена склейки длинных записей, измеренная без эталона.
+
+Голова GigaAM держит около 30 секунд контекста, поэтому запись длиннее движок
+режет на окна и сшивает обратно. Шов - это место, где кончился один проход
+декодера и начался следующий, и именно там теряются и задваиваются слова.
+Проверить это обычным замером нельзя: нужна размеченная расшифровка, а у нас ее
+нет и не будет.
+
+Сдвиговый тест обходится без нее. Та же запись прогоняется дважды: как есть и с
+несколькими секундами тишины впереди. Тишина двигает сетку окон, и швы падают в
+другие места речи, а больше не меняется ничего - ни звук, ни голова, ни
+настройки. Значит любое расхождение двух расшифровок оплачено швом. Идеальная
+склейка дала бы ноль различий.
+
+Своей склейкой этот замер занят намеренно: WER относительно чужого эталона
+смешал бы цену швов с ошибками слуха, а здесь слух у обоих прогонов один и тот
+же."""
+
+# Геометрия окон движка 2.21.0 (`inference/windows.rs`): до 30 с одним проходом,
+# дальше окна по 24 с с перекрытием 2 с, то есть шаг 22 с. Значения вынесены в
+# аргументы: сменится геометрия - замер не придется переписывать.
+DEFAULT_WINDOW_SECS = 24.0
+DEFAULT_OVERLAP_SECS = 2.0
+DEFAULT_SINGLE_PASS_SECS = 30.0
+
+
+def seam_times(duration: float, window: float, overlap: float, single_pass: float) -> list[float]:
+    """Где движок сшивает эту запись. Пусто, если она идет одним проходом."""
+    if duration <= single_pass:
+        return []
+    stride = window - overlap
+    if stride <= 0:
+        raise SystemExit("перекрытие не может быть больше окна")
+    seams = []
+    start = stride
+    while start < duration:
+        # Шов - середина перекрытия: движок отдает ранние слова первому окну,
+        # поздние второму (`token_format::stitch_chunk_words`).
+        seams.append(start + overlap / 2)
+        start += stride
+    return seams
+
+
+def prepend_silence(path: Path, seconds: float, out: Path) -> Path:
+    """Копия записи с тишиной впереди - тем же форматом, без перекодирования.
+
+    Только WAV: сдвиг обязан быть единственным отличием, а пересборка WebM или
+    mp3 протащила бы в замер еще и разницу кодеков.
+    """
+    import wave
+
+    with wave.open(str(path), "rb") as src:
+        params = src.getparams()
+        frames = src.readframes(params.nframes)
+    silence = b"\x00" * int(seconds * params.framerate) * params.sampwidth * params.nchannels
+    with wave.open(str(out), "wb") as dst:
+        dst.setparams(params)
+        dst.writeframes(silence + frames)
+    return out
+
+
+def diff_positions(
+    reference: list[str], hypothesis: list[str], duration: float
+) -> list[dict[str, Any]]:
+    """Различия с их примерным местом в записи, в секундах.
+
+    Место считается по доле слова в расшифровке, а не по меткам времени: API
+    отдает текст, и точность здесь нужна не посекундная, а достаточная, чтобы
+    увидеть, кучкуются различия у швов или рассыпаны по всей записи.
+    """
+    changes = []
+    total = max(len(reference), 1)
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(a=reference, b=hypothesis).get_opcodes():
+        if tag == "equal":
+            continue
+        changes.append(
+            {
+                "tag": tag,
+                "was": " ".join(reference[i1:i2]) or "-",
+                "became": " ".join(hypothesis[j1:j2]) or "-",
+                "at_seconds": round(i1 / total * duration, 1),
+            }
+        )
+    return changes
+
+
+def nearest_seam(at: float, seams: list[float]) -> float | None:
+    return min((abs(at - seam) for seam in seams), default=None)
+
+
+def command_seams(args: argparse.Namespace) -> int:
+    console = Console(args.url, args.api_key)
+    shifted_dir = Path(args.workdir) if args.workdir else RESULTS / "seams-shifted"
+    shifted_dir.mkdir(parents=True, exist_ok=True)
+    records = []
+    try:
+        engine = console.deploy(json.loads(args.deploy)) if args.deploy else console.status()["engine"]
+        for path in collect_audio(args.audio):
+            if path.suffix.lower() != ".wav":
+                print(f"  {path.name}: пропущен, сдвиг делается только для WAV", file=sys.stderr)
+                continue
+            plain = console.transcribe(path)
+            shifted_path = prepend_silence(path, args.shift, shifted_dir / f"shift-{path.name}")
+            shifted = console.transcribe(shifted_path)
+
+            duration = plain.get("audio_seconds") or 0.0
+            seams = seam_times(duration, args.window, args.overlap, args.single_pass)
+            before = normalize(plain.get("text", ""))
+            after = normalize(shifted.get("text", ""))
+            changes = diff_positions(before, after, duration)
+            for change in changes:
+                change["seam_distance"] = nearest_seam(change["at_seconds"], seams)
+            records.append(
+                {
+                    "file": path.name,
+                    "audio_seconds": duration,
+                    "single_pass": not seams,
+                    "seams": [round(seam, 1) for seam in seams],
+                    "wer": round(word_error_rate(before, after), 4),
+                    "words": len(before),
+                    "changes": changes,
+                    "elapsed": {"plain": plain["elapsed"], "shifted": shifted["elapsed"]},
+                    "text": {"plain": plain.get("text", ""), "shifted": shifted.get("text", "")},
+                }
+            )
+            print(
+                f"  {path.name}: {duration:.0f} с, швов {len(seams)}, "
+                f"различий {len(changes)}",
+                file=sys.stderr,
+            )
+        payload = {
+            "label": args.label,
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "shift_seconds": args.shift,
+            "geometry": {
+                "window": args.window,
+                "overlap": args.overlap,
+                "single_pass": args.single_pass,
+            },
+            "engine": engine,
+            "console_version": console_version(console.url, console.client),
+            "records": records,
+        }
+    finally:
+        console.close()
+    RESULTS.mkdir(parents=True, exist_ok=True)
+    out = RESULTS / f"{args.label}.seams.json"
+    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"\nзаписано: {out}")
+    print_seams(records)
+    return 0
+
+
+def print_seams(records: list[dict[str, Any]]) -> None:
+    print(f"{'файл':28} {'длит.':>8} {'швов':>5} {'слов':>6} {'различий':>9} {'WER':>7}")
+    for record in records:
+        print(
+            f"{record['file'][:28]:28} {record['audio_seconds']:7.0f}с {len(record['seams']):5} "
+            f"{record['words']:6} {len(record['changes']):9} {record['wer']:6.2%}"
+        )
+    # Различие у шва и различие посреди окна - это разные диагнозы, и смешивать
+    # их в одном числе нельзя: первое лечится склейкой, второе - ничем.
+    near = [
+        change
+        for record in records
+        for change in record["changes"]
+        if change.get("seam_distance") is not None and change["seam_distance"] <= 3.0
+    ]
+    total = sum(len(record["changes"]) for record in records)
+    if total:
+        print(f"\nиз {total} различий {len(near)} ближе 3 с к шву")
+    for record in records:
+        for change in record["changes"]:
+            distance = change.get("seam_distance")
+            mark = f"{distance:.0f} с до шва" if distance is not None else "швов нет"
+            print(f"  {record['file'][:20]:20} ~{change['at_seconds']:6.1f}с "
+                  f"[{mark}] {change['was']} -> {change['became']}")
+
+
 # ---------------------------------------------------------------------- сравнение
 
 def load_run(path: str) -> dict[str, Any]:
@@ -318,6 +499,19 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--repeat", type=int, default=3, help="прогонов на файл, берется лучшее")
     run.add_argument("--deploy", default="", help='тело POST /api/deploy, например {"variant":"e2e_rnnt"}')
     run.set_defaults(func=command_run)
+
+    seams = sub.add_parser("seams", help="цена склейки окон: та же запись со сдвигом")
+    seams.add_argument("--url", default="http://localhost:8080")
+    seams.add_argument("--api-key", default="")
+    seams.add_argument("--audio", nargs="+", required=True, help="каталог или список WAV")
+    seams.add_argument("--label", required=True)
+    seams.add_argument("--shift", type=float, default=3.0, help="секунд тишины впереди")
+    seams.add_argument("--window", type=float, default=DEFAULT_WINDOW_SECS)
+    seams.add_argument("--overlap", type=float, default=DEFAULT_OVERLAP_SECS)
+    seams.add_argument("--single-pass", type=float, default=DEFAULT_SINGLE_PASS_SECS)
+    seams.add_argument("--workdir", default="", help="куда класть сдвинутые копии")
+    seams.add_argument("--deploy", default="")
+    seams.set_defaults(func=command_seams)
 
     compare = sub.add_parser("compare", help="сравнить два прогона по времени и тексту")
     compare.add_argument("a")

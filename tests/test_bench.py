@@ -255,3 +255,113 @@ class _Accepted:
 
     def json(self) -> dict:
         return {"status": "accepted"}
+
+
+# ------------------------------------------------------------------------- швы
+
+def test_short_recording_has_no_seams_at_all():
+    """До порога одного прохода движок не режет ничего, и мерить нечего."""
+    assert bench.seam_times(29.0, 24.0, 2.0, 30.0) == []
+
+
+def test_seams_land_on_the_stride_grid_at_the_middle_of_the_overlap():
+    """Шаг - окно минус перекрытие, шов - середина перекрытия (stitch_chunk_words)."""
+    assert bench.seam_times(70.0, 24.0, 2.0, 30.0) == [23.0, 45.0, 67.0]
+
+
+def test_seam_geometry_refuses_an_overlap_larger_than_the_window():
+    with pytest.raises(SystemExit):
+        bench.seam_times(100.0, 2.0, 24.0, 30.0)
+
+
+def test_prepend_silence_shifts_the_recording_and_keeps_its_format(tmp_path):
+    """Сдвиг обязан быть единственным отличием, иначе замер мерит не швы."""
+    import wave
+
+    source = tmp_path / "исходник.wav"
+    source.write_bytes(wav_bytes(seconds=2))
+    shifted = bench.prepend_silence(source, 3.0, tmp_path / "сдвинутый.wav")
+
+    with wave.open(str(source)) as a, wave.open(str(shifted)) as b:
+        assert b.getframerate() == a.getframerate()
+        assert b.getsampwidth() == a.getsampwidth()
+        assert b.getnchannels() == a.getnchannels()
+        assert b.getnframes() == a.getnframes() + 3 * a.getframerate()
+        assert b.readframes(3 * a.getframerate()) == b"\x00" * (
+            3 * a.getframerate() * a.getsampwidth() * a.getnchannels()
+        )
+
+
+def test_identical_transcripts_mean_the_seams_cost_nothing():
+    assert bench.diff_positions(["раз", "два"], ["раз", "два"], 60.0) == []
+
+
+def test_a_lost_word_is_reported_with_where_it_was_lost():
+    changes = bench.diff_positions(["раз", "два", "три", "четыре"], ["раз", "три", "четыре"], 40.0)
+    assert len(changes) == 1
+    assert changes[0]["was"] == "два"
+    assert changes[0]["became"] == "-"
+    assert changes[0]["at_seconds"] == 10.0
+
+
+def test_nearest_seam_is_none_when_the_recording_was_one_pass():
+    assert bench.nearest_seam(10.0, []) is None
+    assert bench.nearest_seam(25.0, [23.0, 45.0]) == 2.0
+
+
+async def test_seams_run_against_a_live_console(live_client, tmp_path, monkeypatch):
+    """Полный прогон команды: заглушка отвечает одинаково, значит различий ноль."""
+    from console.state import EngineConfig
+
+    await live_client.app.state.supervisor.deploy(EngineConfig())
+    audio = tmp_path / "длинная.wav"
+    audio.write_bytes(wav_bytes(seconds=2))
+    monkeypatch.setattr(bench, "RESULTS", tmp_path / "results")
+
+    code = await asyncio.to_thread(
+        bench.main,
+        [
+            "seams",
+            "--url",
+            str(live_client.base_url),
+            "--audio",
+            str(audio),
+            "--label",
+            "швы",
+            "--shift",
+            "1",
+            "--workdir",
+            str(tmp_path / "сдвиги"),
+        ],
+    )
+    assert code == 0
+
+    saved = json.loads((tmp_path / "results" / "швы.seams.json").read_text(encoding="utf-8"))
+    assert saved["shift_seconds"] == 1.0
+    assert saved["geometry"]["window"] == 24.0
+    record = saved["records"][0]
+    assert record["file"] == "длинная.wav"
+    # Две секунды - один проход, швов нет, и заглушка отвечает одним и тем же.
+    assert record["single_pass"] is True
+    assert record["changes"] == []
+    assert record["wer"] == 0.0
+
+
+async def test_seams_skips_what_it_cannot_shift_without_re_encoding(
+    live_client, tmp_path, monkeypatch, capsys
+):
+    """WebM пересобрать нельзя, не подмешав в замер разницу кодеков."""
+    from console.state import EngineConfig
+
+    await live_client.app.state.supervisor.deploy(EngineConfig())
+    audio = tmp_path / "запись.webm"
+    audio.write_bytes(b"not really webm")
+    monkeypatch.setattr(bench, "RESULTS", tmp_path / "results")
+
+    code = await asyncio.to_thread(
+        bench.main,
+        ["seams", "--url", str(live_client.base_url), "--audio", str(audio), "--label", "пропуск"],
+    )
+    assert code == 0
+    saved = json.loads((tmp_path / "results" / "пропуск.seams.json").read_text(encoding="utf-8"))
+    assert saved["records"] == []

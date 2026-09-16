@@ -19,6 +19,12 @@ at `/api/openapi.json` (`info.version`) read it from there.
   reload. Nothing is auto-detected from the browser language.
 - `GET /api/models` accepts `?lang=en|ru` and localises the head descriptions, badges
   and notes, falling back to English for an unknown value.
+- `bench/bench.py seams` measures what window stitching costs on recordings longer
+  than a single pass, without needing a reference transcript: the same file is run
+  twice, the second time with a few seconds of silence prepended, so every difference
+  between the two transcripts was paid for by a seam. It reports the seam positions,
+  each difference and its distance to the nearest seam. See
+  [docs/research/long-form-seams.md](docs/research/long-form-seams.md).
 - The status payload carries `detail_code` and `detail_params` alongside `detail`, so
   the console composes the sentence in the chosen language instead of translating a
   finished string.
