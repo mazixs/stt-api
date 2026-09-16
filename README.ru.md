@@ -6,6 +6,9 @@
 
 *English version: [README.md](README.md).*
 
+*Консоль двуязычная: по умолчанию английский, русский включается переключателем
+EN/RU в шапке. Выбор запоминается в браузере.*
+
 [![Лицензия Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue)](pyproject.toml)
 [![Docker](https://img.shields.io/badge/docker-compose-blue)](docker-compose.yml)

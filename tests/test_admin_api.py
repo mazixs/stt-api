@@ -244,8 +244,9 @@ async def test_glossary_reports_env_phrases_missing_from_the_list(client_ready):
 
 
 async def test_models_expose_badges(client_ready):
+    """Без `lang` каталог отвечает по-английски: это язык интерфейса по умолчанию."""
     heads = {h["id"]: h for h in (await client_ready.get("/api/models")).json()["heads"]}
-    assert heads["e2e_rnnt"]["badge"] == "лучшая для русского"
+    assert heads["e2e_rnnt"]["badge"] == "best for Russian"
     assert heads["rnnt"]["badge"] is None
 
 

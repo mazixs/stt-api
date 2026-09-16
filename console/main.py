@@ -88,7 +88,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 def _versioned_index() -> str:
     """Разметка, в которой ссылки на ассеты помечены отпечатком их содержимого."""
     html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-    for name in ("app.js", "style.css"):
+    for name in ("i18n.js", "app.js", "style.css"):
         asset = STATIC_DIR / name
         if not asset.is_file():
             continue

@@ -10,6 +10,30 @@ This file records *what* shipped in each version. *Why* it was done that way liv
 The version number lives in `console/__init__.py`; both `pyproject.toml` and the schema
 at `/api/openapi.json` (`info.version`) read it from there.
 
+## [Unreleased]
+
+### Added
+
+- The web console is bilingual. English is the default and Russian is switched on with
+  the EN/RU control in the header; the choice is kept in the browser and survives a
+  reload. Nothing is auto-detected from the browser language.
+- `GET /api/models` accepts `?lang=en|ru` and localises the head descriptions, badges
+  and notes, falling back to English for an unknown value.
+- The status payload carries `detail_code` and `detail_params` alongside `detail`, so
+  the console composes the sentence in the chosen language instead of translating a
+  finished string.
+
+### Changed
+
+- `README.md` is now the English one and the Russian text moved to `README.ru.md`; the
+  two are cross-linked. The documents under `docs/` stay Russian only.
+- Static assets are fingerprinted (`?v=<hash>`), so a changed `i18n.js`, `app.js` or
+  `style.css` is picked up without a hard reload.
+
+### Notes
+
+- `detail` keeps its Russian wording on purpose: it is also the log line.
+
 ## [1.4.0] - 2026-09-05
 
 ### Added
@@ -172,6 +196,7 @@ fixes, not construction.
 - Licensed under Apache 2.0; the repository history begins with a single commit made
   when the sources were opened.
 
+[Unreleased]: https://github.com/mazixs/stt-api/compare/v1.4.0...HEAD
 [1.4.0]: https://github.com/mazixs/stt-api/releases/tag/v1.4.0
 [1.3.0]: https://github.com/mazixs/stt-api/releases/tag/v1.3.0
 [1.2.0]: https://github.com/mazixs/stt-api/releases/tag/v1.2.0

@@ -1,4 +1,4 @@
-from console.catalog import HEADS, is_downloaded, openai_model_id
+from console.catalog import HEADS, LANGS, is_downloaded, openai_model_id, pick
 
 
 def test_catalog_lists_four_heads_in_ui_order():
@@ -39,9 +39,26 @@ def test_openai_model_ids():
 
 
 def test_badges_name_our_own_measurement_not_someone_elses_table():
-    assert HEADS["e2e_rnnt"].badge == "лучшая для русского"
-    assert HEADS["ml_ctc_large"].badge == "лучшая мультиязычная"
+    assert HEADS["e2e_rnnt"].badge["ru"] == "лучшая для русского"
+    assert HEADS["ml_ctc_large"].badge["ru"] == "лучшая мультиязычная"
     assert HEADS["rnnt"].badge is None and HEADS["ml_ctc"].badge is None
     for head in HEADS.values():
         if head.badge:
-            assert "наш замер" in head.badge_note
+            assert "наш замер" in head.badge_note["ru"]
+            assert "our own measurement" in head.badge_note["en"].lower()
+
+
+def test_every_head_text_exists_in_both_languages():
+    """Пропущенный перевод показал бы пустую карточку, а не фразу не на том языке."""
+    for head in HEADS.values():
+        for field in (head.subtitle, head.badge, head.badge_note):
+            if field is None:
+                continue
+            assert set(field) == set(LANGS), head.id
+            assert all(value.strip() for value in field.values()), head.id
+
+
+def test_unknown_language_falls_back_to_english():
+    assert pick({"en": "a", "ru": "б"}, "xx") == "a"
+    assert pick({"en": "a"}, "ru") == "a"
+    assert pick(None, "en") is None

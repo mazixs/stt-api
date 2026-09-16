@@ -1,8 +1,12 @@
 /* Консоль STT: без сборки и без зависимостей.
-   Запись с микрофона собирается в WAV прямо в браузере, поэтому в образе не нужен ffmpeg. */
+   Запись с микрофона собирается в WAV прямо в браузере, поэтому в образе не нужен ffmpeg.
+
+   Все подписи идут через `t()` из i18n.js: язык интерфейса переключается на месте,
+   без перезагрузки страницы, поэтому готовых строк здесь не остается. */
 
 const $ = (id) => document.getElementById(id);
 const KEY_STORAGE = "stt_console_key";
+const { t, currentLang, setLang, applyStaticTexts } = window.i18n;
 
 const state = {
   key: localStorage.getItem(KEY_STORAGE) || "",
@@ -26,7 +30,7 @@ async function api(path, options, retry) {
   opts.headers = authHeaders(opts.headers);
   const response = await fetch(path, opts);
   if (response.status === 401 && !retry) {
-    const entered = window.prompt("Сервис защищён ключом. Введите API_KEY из файла .env:", "");
+    const entered = window.prompt(t("api.keyPrompt"), "");
     if (entered) {
       state.key = entered.trim();
       localStorage.setItem(KEY_STORAGE, state.key);
@@ -35,7 +39,7 @@ async function api(path, options, retry) {
     }
   }
   if (!response.ok) {
-    let message = "Ошибка " + response.status;
+    let message = t("api.error", { status: response.status });
     try {
       const body = await response.json();
       if (body && body.error && body.error.message) message = body.error.message;
@@ -51,20 +55,31 @@ async function api(path, options, retry) {
 
 /* ------------------------------------------------------------------- статус */
 
-const STATE_WORDS = {
-  stopped: "не развёрнуто",
-  downloading: "скачиваю модель",
-  starting: "запускаю движок",
-  ready: "готово",
-  error: "ошибка",
-};
+const stateWord = (name) => t("state." + name);
+
+/* Сервер присылает и готовую строку (она же уходит в лог), и код с подстановками.
+   Показываем код словами выбранного языка, а `detail` остаётся запасным вариантом:
+   так новая фраза на сервере не превращается в пустую строку в интерфейсе. */
+function detailText(status) {
+  const code = status.detail_code;
+  if (!code) return status.detail || "—";
+  const params = Object.assign({}, status.detail_params || {});
+  if (params.kind) params.reason = t("download." + params.kind);
+  let text = t("detail." + code, params);
+  if (text === "detail." + code) return status.detail || "—";
+  if (code === "download.failed") {
+    if (params.attempts > 1) text += t("detail.download.failedAttempts", params);
+    if (params.running) text += t("detail.download.failedRunning", params);
+  }
+  return text;
+}
 
 function renderStatus(status) {
   state.status = status;
   const pill = $("state-pill");
   pill.dataset.state = status.status;
-  $("state-label").textContent = STATE_WORDS[status.status] || status.status;
-  $("state-detail").textContent = status.detail || "—";
+  $("state-label").textContent = stateWord(status.status) || status.status;
+  $("state-detail").textContent = detailText(status);
   $("btn-stop").classList.toggle("hidden", status.status !== "ready");
   $("key-badge").classList.toggle("hidden", !status.api_key_set);
 
@@ -72,7 +87,7 @@ function renderStatus(status) {
   const metrics = status.metrics || {};
   $("ro-variant").textContent = engine.variant || "—";
   $("ro-elapsed").textContent = metrics.avg_elapsed !== null && metrics.avg_elapsed !== undefined
-    ? metrics.avg_elapsed.toFixed(2) + " с" : "—";
+    ? t("unit.seconds", { value: metrics.avg_elapsed.toFixed(2) }) : "—";
   $("ro-rtf").textContent = metrics.avg_rtf ? "×" + (1 / metrics.avg_rtf).toFixed(1) : "—";
   $("ro-total").textContent = metrics.total_files === undefined ? "—" : metrics.total_files;
   $("ro-restarts").textContent = status.restart_count === undefined ? "—" : status.restart_count;
@@ -105,12 +120,9 @@ function afterStatusSettles(name) {
    значению из файла после каждого перезапуска контейнера. Поэтому расхождение не
    сливается само, а показывается - и применяется одной кнопкой. */
 
-const FIELD_WORDS = {
-  variant: "голова", punctuation: "пунктуация", itn: "числа цифрами", vad: "пропуск тишины",
-  pool_size: "одновременных распознаваний", hotwords_boost: "сила подсказки",
-  hotwords_default: "словарь брендов", file_window_concurrency: "окон параллельно",
-};
-const humanValue = (v) => (v === true ? "включен" : v === false ? "выключен" : String(v));
+const fieldWord = (name) => t("field." + name);
+const humanValue = (v) =>
+  v === true ? t("env.value.on") : v === false ? t("env.value.off") : String(v);
 
 function renderEnvDiff(env) {
   const box = $("env-diff");
@@ -123,8 +135,11 @@ function renderEnvDiff(env) {
   names.forEach((name) => {
     const li = document.createElement("li");
     li.className = "mono";
-    li.textContent = (FIELD_WORDS[name] || name) + ": в .env " + humanValue(diverges[name].env) +
-      ", развёрнуто " + humanValue(diverges[name].state);
+    li.textContent = t("env.line", {
+      field: fieldWord(name),
+      env: humanValue(diverges[name].env),
+      state: humanValue(diverges[name].state),
+    });
     list.appendChild(li);
   });
   $("btn-deploy-env").disabled = deployBusy(state.status && state.status.status);
@@ -167,15 +182,16 @@ function renderRecent(metrics) {
   recent.forEach((item) => {
     const tr = document.createElement("tr");
     tr.appendChild(cell(item.name, "name"));
-    tr.appendChild(cell(item.audio_seconds ? item.audio_seconds.toFixed(1) + " с" : "—"));
-    tr.appendChild(cell(item.elapsed.toFixed(2) + " с"));
+    tr.appendChild(cell(item.audio_seconds
+      ? t("unit.seconds", { value: item.audio_seconds.toFixed(1) }) : "—"));
+    tr.appendChild(cell(t("unit.seconds", { value: item.elapsed.toFixed(2) })));
     tr.appendChild(cell(item.rtf ? "×" + (1 / item.rtf).toFixed(1) : "—"));
     rows.appendChild(tr);
   });
 
   const total = metrics.avg_elapsed_total;
   $("recent-note").textContent = total
-    ? "средняя задержка за всё время — " + total.toFixed(2) + " с на файл"
+    ? t("recent.average", { value: total.toFixed(2) })
     : "";
 }
 
@@ -187,26 +203,18 @@ function cell(text, className) {
   return td;
 }
 
-function plural(count, one, few, many) {
-  const mod100 = count % 100;
-  const mod10 = count % 10;
-  if (mod100 >= 11 && mod100 <= 14) return count + " " + many;
-  if (mod10 === 1) return count + " " + one;
-  if (mod10 >= 2 && mod10 <= 4) return count + " " + few;
-  return count + " " + many;
-}
-
+/* Формы числа берёт Intl.PluralRules внутри i18n: в русском их три, в английском две. */
 function phraseCount(count) {
-  return count ? plural(count, "фраза", "фразы", "фраз") : "фраз нет";
+  return count ? t("glossary.count", { count }) : t("glossary.none");
 }
 
 function formatUptime(seconds) {
   if (seconds === undefined || seconds === null) return "—";
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
-  if (hours) return hours + " ч " + minutes + " мин";
-  if (minutes) return minutes + " мин";
-  return seconds + " с";
+  if (hours) return t("time.hours", { hours, minutes });
+  if (minutes) return t("time.minutes", { minutes });
+  return t("time.seconds", { seconds });
 }
 
 let defaultsApplied = false;
@@ -234,7 +242,8 @@ async function refreshStatus() {
 
 async function loadHeads() {
   try {
-    renderHeads(await api("/api/models"));
+    // Подписи голов приходят с сервера, поэтому язык спрашивается у него же.
+    renderHeads(await api("/api/models?lang=" + encodeURIComponent(currentLang())));
   } catch (err) {
     /* каталог не критичен для остальной страницы */
   }
@@ -260,7 +269,7 @@ function renderHeads(payload) {
   renderDeploying(state.status || {});
 }
 
-const headButtonLabel = (head) => (head.deployed ? "Перезапустить" : "Развернуть");
+const headButtonLabel = (head) => t(head.deployed ? "head.redeploy" : "head.deploy");
 
 function buildHeadCard(head) {
   const card = document.createElement("article");
@@ -283,10 +292,10 @@ function buildHeadCard(head) {
   const meta = document.createElement("div");
   meta.className = "head-meta";
   meta.appendChild(tag(head.languages.join(" · ")));
-  meta.appendChild(tag("~" + head.size_mb + " МБ"));
-  if (head.native_punctuation) meta.appendChild(tag("пунктуация в модели"));
+  meta.appendChild(tag(t("head.size", { mb: head.size_mb })));
+  if (head.native_punctuation) meta.appendChild(tag(t("head.nativePunctuation")));
   // Значок «скачано» создаётся всегда и прячется: иначе его появление пересобирало бы meta.
-  const downloadedTag = tag("скачано", true);
+  const downloadedTag = tag(t("head.downloaded"), true);
   downloadedTag.classList.add("hidden");
   meta.appendChild(downloadedTag);
 
@@ -311,17 +320,18 @@ function buildHeadCard(head) {
    Процентов у проверки весов и сборки графа нет, поэтому полоса там бегущая. */
 
 const SLOW_START_MS = 20000;
-const ROLLBACK = /откат/i;
+/* Откат узнаётся по коду, а не по слову в тексте: текст двуязычный, код один. */
+const isRollback = (status) => String(status.detail_code || "").indexOf("rollback.") === 0;
 
 const PHASE_WORDS = {
   downloading: (s) => (s.download_percent === null || s.download_percent === undefined)
-    ? "проверяю веса"
-    : "скачиваю " + s.download_percent + "%",
+    ? t("phase.verifying")
+    : t("phase.downloading", { percent: s.download_percent }),
   starting: (s) => {
-    if (ROLLBACK.test(s.detail || "")) return "откат на прежнюю голову";
+    if (isRollback(s)) return t("phase.rollback");
     return startingSince && Date.now() - startingSince > SLOW_START_MS
-      ? "собираю граф, первый запуск до 2 минут"
-      : "запускаю движок";
+      ? t("phase.building")
+      : t("phase.starting");
   },
 };
 
@@ -348,11 +358,11 @@ function renderDeploying(status) {
   } else {
     deployingSeries = false;
     if (status.status === "error" && lastTarget) {
-      cardError = { id: lastTarget, text: status.detail || "не удалось развернуть" };
-    } else if (status.status === "ready" && clickedTarget && ROLLBACK.test(status.detail || "")) {
+      cardError = { id: lastTarget, text: detailText(status) || t("deploy.failed") };
+    } else if (status.status === "ready" && clickedTarget && isRollback(status)) {
       // Откат кончается зелёным `ready` на другой голове, и без этой ветки о неудаче
       // говорила бы только пилюля наверху - ровно то, что мы и убирали.
-      cardError = { id: clickedTarget, text: status.detail };
+      cardError = { id: clickedTarget, text: detailText(status) };
     }
   }
 
@@ -361,7 +371,7 @@ function renderDeploying(status) {
     const failed = cardError !== null && cardError.id === id;
     entry.button.classList.toggle("hidden", isTarget);
     entry.button.disabled = active;
-    entry.button.textContent = failed ? "Повторить" : headButtonLabel(entry.head);
+    entry.button.textContent = failed ? t("head.retry") : headButtonLabel(entry.head);
     entry.progress.classList.toggle("hidden", !isTarget);
     entry.error.classList.toggle("hidden", !failed);
     if (failed) entry.error.textContent = cardError.text;
@@ -493,9 +503,10 @@ function renderEnvMissing(payload) {
     (phrase) => !glossary.entries.some((entry) => fold(entry.phrase) === fold(phrase)));
   $("glossary-env").classList.toggle("hidden", !missing.length);
   if (!missing.length) return;
-  $("glossary-env-text").textContent = "В .env (INITIAL_CONTEXT) есть " +
-    plural(missing.length, "фраза", "фразы", "фраз") + ", которых нет в списке: " +
-    missing.join(", ") + ".";
+  $("glossary-env-text").textContent = t("glossary.envMissing", {
+    count: missing.length,
+    list: missing.join(", "),
+  });
   $("btn-glossary-env").onclick = () => addPhrases(missing.join("\n"));
 }
 
@@ -505,7 +516,7 @@ function tagChip(entry, index) {
   chip.dataset.index = String(index);
   if (glossary.dropped.has(fold(entry.phrase))) {
     chip.dataset.dropped = "true";
-    chip.title = "движок не сможет это написать и выбросит фразу";
+    chip.title = t("glossary.dropTitle");
   }
 
   const label = document.createElement("span");
@@ -517,7 +528,7 @@ function tagChip(entry, index) {
     const weight = document.createElement("span");
     weight.className = "tag-weight";
     weight.textContent = "·" + entry.weight;
-    weight.title = "вес подсказки";
+    weight.title = t("glossary.weight");
     chip.appendChild(weight);
   }
 
@@ -525,7 +536,7 @@ function tagChip(entry, index) {
   remove.type = "button";
   remove.className = "tag-remove";
   remove.textContent = "×";
-  remove.setAttribute("aria-label", "Убрать «" + entry.phrase + "»");
+  remove.setAttribute("aria-label", t("glossary.remove", { phrase: entry.phrase }));
   remove.addEventListener("click", () => removePhrase(index));
   chip.appendChild(remove);
   return chip;
@@ -536,7 +547,9 @@ function renderReach(payload) {
   const hint = $("dropped-hint");
   const total = glossary.entries.length;
   const dropped = glossary.dropped.size;
-  const head = payload && payload.variant ? "головы " + payload.variant : "выбранной головы";
+  const head = payload && payload.variant
+    ? t("glossary.headNamed", { variant: payload.variant })
+    : t("glossary.headAny");
 
   if (!total) {
     reach.textContent = "";
@@ -545,14 +558,15 @@ function renderReach(payload) {
   }
   if (payload && payload.usable_count === null) {
     reach.dataset.loss = "false";
-    reach.textContent = "веса ещё не скачаны — что дойдёт до движка, будет видно после развёртывания";
+    reach.textContent = t("glossary.notDownloaded");
     hint.textContent = "";
     return;
   }
   reach.dataset.loss = String(dropped > 0);
   reach.textContent = dropped
-    ? "зачёркнутое движок выбросит: " + plural(dropped, "фраза", "фразы", "фраз") + " из " + total
-    : "все фразы дойдут до движка" + (payload && payload.approximate ? "; оценка приблизительная" : "");
+    ? t("glossary.lost", { dropped, total })
+    : t("glossary.allReach") +
+      (payload && payload.approximate ? t("glossary.approximate") : "");
   hint.textContent = dropped ? droppedHint(payload && payload.alphabet, head) : "";
 }
 
@@ -561,18 +575,15 @@ function renderReach(payload) {
    Про регистр советовать нечего — движок сам пробует фразу строчными и с «е»
    вместо «ё», поэтому уцелеть тут может только другой алфавит. */
 function droppedHint(alphabet, head) {
-  if (!alphabet) return "В словаре " + head + " нет части этих символов.";
+  if (!alphabet) return t("glossary.missingSymbols", { head });
 
   const missing = [];
-  if (!alphabet.latin) missing.push("латиницы");
-  if (!alphabet.digits) missing.push("цифр");
-  if (!missing.length) {
-    return "Эти фразы содержат символы, которых нет в словаре " + head + ".";
-  }
-  const advice = alphabet.latin
-    ? ""
-    : " Пишите такие названия по-русски: опенвиспр вместо OpenWhispr.";
-  return "В словаре " + head + " нет " + missing.join(" и ") + "." + advice;
+  if (!alphabet.latin) missing.push(t("glossary.latin"));
+  if (!alphabet.digits) missing.push(t("glossary.digits"));
+  if (!missing.length) return t("glossary.missingSymbols", { head });
+  const list = missing.join(t("glossary.listSeparator"));
+  const advice = alphabet.latin ? "" : t("glossary.latinAdvice");
+  return t("glossary.missingList", { head, missing: list }) + advice;
 }
 
 /* --- правка списка --- */
@@ -593,9 +604,9 @@ function addPhrases(raw) {
   renderGlossary(null);
   loadGlossary(true);
   if (added.length) {
-    $("glossary-hint").textContent = "добавлено, нажмите «Применить»";
+    $("glossary-hint").textContent = t("glossary.added");
   } else if (duplicate !== null) {
-    $("glossary-hint").textContent = "уже в списке";
+    $("glossary-hint").textContent = t("glossary.duplicate");
     flashChip(duplicate);
   }
   return added.length;
@@ -613,7 +624,7 @@ function removePhrase(index) {
   glossary.entries.splice(index, 1);
   renderGlossary(null);
   loadGlossary(true);
-  $("glossary-hint").textContent = "убрано, нажмите «Применить»";
+  $("glossary-hint").textContent = t("glossary.removed");
 }
 
 function commitInput() {
@@ -629,7 +640,7 @@ function commitInput() {
    черты и повторы, а вернёт канонический вид, которым мы и заменяем свой список. */
 async function sendGlossary(text, note) {
   const hint = $("glossary-hint");
-  hint.textContent = "применяю…";
+  hint.textContent = t("glossary.applying");
   try {
     const payload = await api("/api/glossary", {
       method: "POST",
@@ -637,8 +648,8 @@ async function sendGlossary(text, note) {
       body: JSON.stringify({ text }),
     });
     hint.textContent = payload.applied
-      ? note || "движок перечитал глоссарий"
-      : "не удалось применить";
+      ? note || t("glossary.applied")
+      : t("glossary.applyFailed");
     await loadGlossary();
     return payload.count;
   } catch (err) {
@@ -658,15 +669,17 @@ async function importGlossary(file) {
   const added = addPhrases(await file.text());
   const skipped = parseGlossary(await file.text()).length - added;
   $("glossary-hint").textContent = added
-    ? "из файла добавлено " + plural(added, "фраза", "фразы", "фраз") +
-      (skipped ? ", повторов пропущено " + skipped : "") + " — нажмите «Применить»"
-    : "новых фраз в файле не нашлось";
+    ? t("glossary.imported", {
+        added,
+        skipped: skipped ? t("glossary.importedSkipped", { count: skipped }) : "",
+      })
+    : t("glossary.importedNothing");
   return glossary.entries.length - before;
 }
 
 function exportGlossary() {
   if (!glossary.entries.length) {
-    $("glossary-hint").textContent = "глоссарий пуст";
+    $("glossary-hint").textContent = t("glossary.empty");
     return;
   }
   const url = URL.createObjectURL(
@@ -674,10 +687,10 @@ function exportGlossary() {
   );
   const link = document.createElement("a");
   link.href = url;
-  link.download = "глоссарий.txt";
+  link.download = t("glossary.exportName");
   link.click();
   URL.revokeObjectURL(url);
-  $("glossary-hint").textContent = "файл сохранён";
+  $("glossary-hint").textContent = t("glossary.saved");
 }
 
 /* ----------------------------------------------------------------- проверка */
@@ -686,12 +699,12 @@ async function sendAudio(blob, filename) {
   const result = $("result");
   const text = $("result-text");
   result.classList.remove("hidden");
-  text.textContent = "распознаю…";
+  text.textContent = t("test.recognizing");
   const form = new FormData();
   form.append("file", blob, filename);
   try {
     const payload = await api("/api/test", { method: "POST", body: form });
-    text.textContent = payload.text || "(пусто — тишина или слишком короткая запись)";
+    text.textContent = payload.text || t("test.empty");
     renderLatency(payload);
   } catch (err) {
     text.textContent = err.message;
@@ -715,18 +728,20 @@ function renderLatency(payload) {
   const scale = Math.max(audio, work, 0.001);
   $("bar-audio").style.width = (audio / scale) * 100 + "%";
   $("bar-work").style.width = (work / scale) * 100 + "%";
-  $("val-audio").textContent = audio ? audio.toFixed(1) + " с" : "неизвестно";
-  $("val-work").textContent = work.toFixed(2) + " с";
+  $("val-audio").textContent = audio
+    ? t("unit.seconds", { value: audio.toFixed(1) })
+    : t("latency.unknown");
+  $("val-work").textContent = t("unit.seconds", { value: work.toFixed(2) });
   if (!audio) {
-    verdict.textContent = "длительность известна только для WAV и WebM";
+    verdict.textContent = t("latency.durationOnly");
     verdict.dataset.slow = "false";
     return;
   }
   const ratio = audio / work;
   verdict.dataset.slow = String(ratio < 1);
   verdict.textContent = ratio >= 1
-    ? "быстрее реального времени в " + ratio.toFixed(1) + " раза"
-    : "медленнее записи в " + (1 / ratio).toFixed(1) + " раза";
+    ? t("latency.faster", { ratio: ratio.toFixed(1) })
+    : t("latency.slower", { ratio: (1 / ratio).toFixed(1) });
 }
 
 /* --------------------------------------------------- запись с микрофона → WAV */
@@ -796,12 +811,12 @@ async function stopRecording() {
   const samples = concat(rec.chunks);
   if (samples.length < rate * 0.25) {
     $("result").classList.remove("hidden");
-    $("result-text").textContent = "Запись слишком короткая — скажите фразу подольше.";
+    $("result-text").textContent = t("test.tooShort");
     renderLatency(null);
     return;
   }
   const wav = encodeWav(resample(samples, rate, TARGET_RATE), TARGET_RATE);
-  sendAudio(wav, "запись.wav");
+  sendAudio(wav, t("snippet.file"));
 }
 
 function concat(chunks) {
@@ -874,20 +889,18 @@ function drawMeter(levels) {
 async function toggleRecording() {
   const button = $("btn-record");
   if (state.recording) {
-    button.textContent = "Записать с микрофона";
+    button.textContent = t("btn.record");
     button.classList.remove("btn-record-active");
     await stopRecording();
     return;
   }
   try {
     await startRecording();
-    button.textContent = "Остановить запись";
+    button.textContent = t("btn.recordStop");
     button.classList.add("btn-record-active");
   } catch (err) {
     $("result").classList.remove("hidden");
-    $("result-text").textContent =
-      "Микрофон недоступен: " + err.message +
-      ". Браузеры разрешают запись только на localhost или по HTTPS.";
+    $("result-text").textContent = t("mic.error", { message: err.message });
   }
 }
 
@@ -896,20 +909,99 @@ async function toggleRecording() {
 function renderSnippets() {
   const origin = window.location.origin;
   const auth = state.key ? ' \\\n  -H "Authorization: Bearer ' + state.key + '"' : "";
+  const sample = t("snippet.file");
   $("snip-curl").textContent =
     "curl -X POST " + origin + "/v1/audio/transcriptions" + auth + " \\\n" +
     "  -F model=whisper-1 \\\n" +
-    "  -F file=@запись.wav";
+    "  -F file=@" + sample;
   $("snip-py").textContent =
     "from openai import OpenAI\n\n" +
-    'client = OpenAI(base_url="' + origin + '/v1", api_key="' + (state.key || "не-нужен") + '")\n' +
-    'with open("запись.wav", "rb") as audio:\n' +
+    'client = OpenAI(base_url="' + origin + '/v1", api_key="' +
+      (state.key || t("snippet.noKey")) + '")\n' +
+    'with open("' + sample + '", "rb") as audio:\n' +
     "    result = client.audio.transcriptions.create(model=\"whisper-1\", file=audio)\n" +
     "print(result.text)";
   $("snip-models").textContent = "curl " + origin + "/v1/models" + auth;
   // Документацию открывает браузер, а заголовок он поставить не умеет: ключ идет
   // в строке запроса - тем же способом, что и у SSE на /api/events.
-  $("link-docs").href = state.key ? "/api/docs?api_key=" + encodeURIComponent(state.key) : "/api/docs";
+  const docs = $("link-docs");
+  if (docs) docs.href = state.key ? "/api/docs?api_key=" + encodeURIComponent(state.key) : "/api/docs";
+}
+
+/* ------------------------------------------------------------------ язык */
+
+/* Абзацы, внутри которых есть код и ссылки, собираются здесь: класть разметку в
+   словарь значило бы просить переводчика не сломать теги. Вместо этого в строке
+   стоит подстановка, а чем её заполнить - решает код. */
+
+function code(text) {
+  const node = document.createElement("code");
+  node.textContent = text;
+  return node;
+}
+
+/* Строка с подстановками превращается в узлы: части между {name} - обычный текст,
+   сами подстановки - готовые элементы. */
+function rich(node, key, parts) {
+  node.textContent = "";
+  t(key, Object.keys(parts).reduce((acc, name) => {
+    acc[name] = "\u0000" + name + "\u0000";
+    return acc;
+  }, {})).split("\u0000").forEach((chunk) => {
+    const part = parts[chunk];
+    if (part) node.appendChild(part);
+    else if (chunk) node.appendChild(document.createTextNode(chunk));
+  });
+}
+
+function renderRichTexts() {
+  rich($("models-intro"), "models.intro", { volume: code("./models") });
+  rich($("opt-window-note"), "opt.window.note", {
+    rnnt: code("rnnt"),
+    e2e: code("e2e_rnnt"),
+    mlctc: code("ml_ctc"),
+    mlctcLarge: code("ml_ctc_large"),
+  });
+  rich($("glossary-intro"), "glossary.intro", { example: code(t("glossary.example")) });
+  rich($("connect-intro"), "connect.intro", { prompt: code("prompt") });
+
+  // Ссылка на схему живёт в разметке и переносится в новый абзац как есть:
+  // renderSnippets подставляет в неё ключ и должен находить её по id всегда.
+  const link = $("link-docs") || document.createElement("a");
+  link.id = "link-docs";
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  link.textContent = t("connect.swagger");
+  rich($("connect-docs"), "connect.docs", {
+    link,
+    models: code("GET /v1/models"),
+    model: code("model"),
+  });
+}
+
+/* Переключение языка перерисовывает страницу на месте: перезагрузка сбросила бы
+   несохранённые правки глоссария и обнулила бы ленту логов. Карточки голов
+   выбрасываются намеренно - их подписи приходят с сервера на другом языке. */
+function switchLang(next) {
+  if (!setLang(next)) return;
+  applyStaticTexts();
+  renderRichTexts();
+  renderSnippets();
+  markLangButtons();
+  state.heads.clear();
+  $("heads").textContent = "";
+  loadHeads();
+  if (state.status) renderStatus(state.status);
+  renderGlossary(null);
+  loadGlossary(true);
+}
+
+function markLangButtons() {
+  document.querySelectorAll("#lang .lang-option").forEach((button) => {
+    const on = button.dataset.lang === currentLang();
+    button.setAttribute("aria-pressed", String(on));
+    button.classList.toggle("on", on);
+  });
 }
 
 /* ------------------------------------------------------------------- логи */
@@ -986,9 +1078,10 @@ function init() {
   if (!window.isSecureContext) {
     const button = $("btn-record");
     button.disabled = true;
-    button.title = "Браузер разрешает запись только на localhost или по HTTPS";
-    $("drop").textContent =
-      "Перетащите сюда аудиофайл — запись с микрофона доступна только на localhost или по HTTPS";
+    button.dataset.i18nTitle = "mic.blockedTitle";
+    // Ключ подсказки живёт в разметке, поэтому смена языка не вернёт обратно фразу
+    // про перетаскивание, которая в незащищённом контексте неверна.
+    $("drop").dataset.i18n = "drop.hintInsecure";
   }
   $("btn-record").addEventListener("click", toggleRecording);
   $("btn-stop").addEventListener("click", stopEngine);
@@ -1033,10 +1126,15 @@ function init() {
   document.querySelectorAll(".copy").forEach((button) =>
     button.addEventListener("click", () => {
       navigator.clipboard.writeText($(button.dataset.target).textContent);
-      button.textContent = "Скопировано";
-      setTimeout(() => { button.textContent = "Скопировать"; }, 1500);
+      button.textContent = t("btn.copied");
+      setTimeout(() => { button.textContent = t("btn.copy"); }, 1500);
     }));
+  document.querySelectorAll("#lang .lang-option").forEach((button) =>
+    button.addEventListener("click", () => switchLang(button.dataset.lang)));
   bindDropZone();
+  applyStaticTexts();
+  renderRichTexts();
+  markLangButtons();
   renderSnippets();
   refreshStatus();
   loadHeads();

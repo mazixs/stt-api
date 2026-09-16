@@ -7,6 +7,9 @@ dictation on your own machine - no cloud, no GPU.
 *Read this in [Russian](README.ru.md). The documents under [`docs/`](docs/) are in
 Russian only.*
 
+*The console is bilingual: English by default, Russian behind the EN/RU switch in
+the header. The choice is remembered in the browser.*
+
 [![License Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue)](pyproject.toml)
 [![Docker](https://img.shields.io/badge/docker-compose-blue)](docker-compose.yml)
@@ -43,8 +46,8 @@ cp .env.example .env          # optional: without .env the defaults apply
 docker compose up -d
 ```
 
-Open `http://<server-address>:8091`, press "Развернуть" (Deploy) on the
-**GigaAM v3 RNN-T end-to-end** card and wait for the "готово" (ready) status. The
+Open `http://<server-address>:8091`, press "Deploy" on the
+**GigaAM v3 RNN-T end-to-end** card and wait for the "ready" status. The
 first run downloads ~230 MB of weights; afterwards they stay in `models/` and are not
 downloaded again.
 
@@ -102,7 +105,7 @@ skipping (`VAD=1`): on 3-10 minute recordings it saves 20-30% of the time but ch
 
 The console's own overhead is 5 to 25 milliseconds, i.e. 0.1% on a ten-minute file.
 Your server is probably slower than ours, so the console **measures latency itself** on
-every request and shows it in the "Статус" (Status) section.
+every request and shows it in the "Status" section.
 
 **Your client adds its own time on top of ours.** OpenWhispr does not stream to a
 custom `base_url` and by default pushes the finished text through an LLM cleanup pass
@@ -202,7 +205,7 @@ toward the correct spelling
 
 **`INITIAL_CONTEXT` is read once**, when the glossary file is created - after that,
 edits in the console win. Phrases from `.env` that are missing from the list are shown
-next to the glossary with an "Добавить из .env" (Add from .env) button. They are
+next to the glossary with an "Add from .env" button. They are
 deliberately not merged automatically: a phrase deleted in the console must not come
 back after a restart.
 
@@ -243,8 +246,8 @@ start. Uncomment them and let them diverge from the console's choice, and the co
 will report the mismatch and offer to apply `.env`.
 
 The console will not stay quiet about it. The mismatch is logged at startup, shown in
-plain words in the "Настройки запуска" (Startup settings) section, and applied by the
-"Развернуть с настройками `.env`" (Deploy with `.env` settings) button. What is
+plain words in the "Startup settings" section, and applied by the
+"Deploy with `.env` settings" button. What is
 actually running is verified with `ps -eo args | grep "gigastt serve"`, not with the
 status endpoint: the status shows intent.
 
@@ -285,12 +288,12 @@ not help, download the head's four weight files by hand from the
 [engine release](https://github.com/ekhodzitsky/gigastt/releases) and put them into
 `models/` - the console will see them and start without downloading.
 
-**The "Записать с микрофона" (Record from microphone) button does nothing.** Browsers
+**The "Record from microphone" button does nothing.** Browsers
 grant microphone access only on `localhost` or over HTTPS: open the console through an
 SSH tunnel (`ssh -L 8091:localhost:8091 server`). File recognition always works.
 
 **Logs.** `docker compose logs -f`, which also carries the engine's output. The last
-lines are visible in the console's "Логи" (Logs) section.
+lines are visible in the console's "Logs" section.
 
 **The port is taken.** Change `HOST_PORT` in `.env` and run `docker compose up -d`.
 

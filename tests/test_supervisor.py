@@ -271,3 +271,17 @@ async def test_deploying_names_the_target_and_clears_after_ready(
         assert rollback and all(event["variant"] == "rnnt" for event in rollback)
     finally:
         await supervisor.shutdown()
+
+
+async def test_status_carries_a_machine_readable_code(supervisor):
+    """Интерфейс двуязычный, поэтому фраза собирается у него, а не приезжает готовой.
+    Русский `detail` остаётся - он же идёт в лог."""
+    await supervisor.deploy(cfg(variant="e2e_rnnt"))
+    assert supervisor.status == "ready"
+    assert supervisor.detail_code == "deploy.ready"
+    assert supervisor.detail_params == {"variant": "e2e_rnnt"}
+    assert "e2e_rnnt" in supervisor.detail
+
+    await supervisor.stop_engine()
+    assert supervisor.detail_code == "idle.stopped"
+    assert supervisor.detail_params == {}

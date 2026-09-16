@@ -41,6 +41,10 @@ class Supervisor:
 
         self._status = "stopped"
         self._detail = ""
+        # Рядом с готовой русской строкой едет код и его подстановки: интерфейс
+        # двуязычный, а переводить обратно уже собранное предложение нельзя.
+        self._detail_code: str | None = None
+        self._detail_params: dict[str, Any] = {}
         self._desired: EngineConfig | None = stored.desired
         self._last_good: EngineConfig | None = stored.last_good
         self._download_percent: int | None = None
@@ -70,6 +74,15 @@ class Supervisor:
     @property
     def detail(self) -> str:
         return self._detail
+
+    @property
+    def detail_code(self) -> str | None:
+        """Что именно происходит, машиночитаемо: консоль пишет это словами языка."""
+        return self._detail_code
+
+    @property
+    def detail_params(self) -> dict[str, Any]:
+        return dict(self._detail_params)
 
     @property
     def current(self) -> EngineConfig | None:
@@ -149,9 +162,17 @@ class Supervisor:
     async def health(self) -> dict[str, Any] | None:
         return await self.process.health()
 
-    def _set_status(self, status: str, detail: str = "") -> None:
+    def _set_status(
+        self,
+        status: str,
+        detail: str = "",
+        code: str | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> None:
         self._status = status
         self._detail = detail
+        self._detail_code = code
+        self._detail_params = params or {}
         if status not in ("downloading", "starting"):
             self._deploying = None
         self.state_file.save(
@@ -167,6 +188,8 @@ class Supervisor:
                 "type": "status",
                 "status": status,
                 "detail": detail,
+                "detail_code": code,
+                "detail_params": self._detail_params,
                 "variant": self._deploying or (self.current.variant if self.current else None),
                 "percent": self._download_percent,
             }
@@ -182,20 +205,32 @@ class Supervisor:
         self._desired = cfg
         self._deploying = cfg.variant
         self._download_percent = None
-        self._set_status("downloading", f"Проверяю и скачиваю модель ({cfg.variant})")
+        self._set_status(
+            "downloading",
+            f"Проверяю и скачиваю модель ({cfg.variant})",
+            "deploy.downloading",
+            {"variant": cfg.variant},
+        )
         if not await self._download_with_retries(cfg):
             return
         self._download_percent = None
 
         self._seed_hotwords()
         await self.process.stop()
-        self._set_status("starting", f"Запускаю движок ({cfg.variant})")
+        self._set_status(
+            "starting",
+            f"Запускаю движок ({cfg.variant})",
+            "deploy.starting",
+            {"variant": cfg.variant},
+        )
         started = await self._start_and_wait(cfg, startup_timeout)
         if started:
             self._last_good = cfg
             self._consecutive_failures = 0
             self._backoff_index = 0
-            self._set_status("ready", f"Готово: {cfg.variant}")
+            self._set_status(
+                "ready", f"Готово: {cfg.variant}", "deploy.ready", {"variant": cfg.variant}
+            )
             return
         await self._rollback(cfg, startup_timeout)
 
@@ -213,6 +248,8 @@ class Supervisor:
                     self._set_status(
                         "downloading",
                         f"{exc.message} Пробую снова ({attempt + 1} из {attempts})…",
+                        "download.retry",
+                        {"kind": exc.kind, "attempt": attempt + 1, "attempts": attempts},
                     )
                     await asyncio.sleep(delay)
                     continue
@@ -222,7 +259,16 @@ class Supervisor:
                     detail += f" Попыток было {attempt}."
                 if running is not None:
                     detail += f" Продолжает работать прежняя модель ({running.variant})."
-                self._set_status("error", detail)
+                self._set_status(
+                    "error",
+                    detail,
+                    "download.failed",
+                    {
+                        "kind": exc.kind,
+                        "attempts": attempt,
+                        "running": running.variant if running else None,
+                    },
+                )
                 return False
         return False
 
@@ -241,22 +287,36 @@ class Supervisor:
         reason = self._start_error or "движок не запустился"
         target = self._last_good
         if target is None or target == failed:
-            self._set_status("error", f"Не удалось запустить модель {failed.variant}: {reason}")
+            self._set_status(
+                "error",
+                f"Не удалось запустить модель {failed.variant}: {reason}",
+                "start.failed",
+                {"variant": failed.variant, "reason": reason},
+            )
             return
         self._deploying = target.variant
-        self._set_status("starting", f"Откат на предыдущую модель ({target.variant})")
+        self._set_status(
+            "starting",
+            f"Откат на предыдущую модель ({target.variant})",
+            "rollback.starting",
+            {"variant": target.variant},
+        )
         if await self._start_and_wait(target, startup_timeout):
             self._desired = target
             self._set_status(
                 "ready",
                 f"Откат на предыдущую модель ({target.variant}): "
                 f"модель {failed.variant} не запустилась — {reason}",
+                "rollback.done",
+                {"variant": target.variant, "failed": failed.variant, "reason": reason},
             )
             return
         self._set_status(
             "error",
             f"Модель {failed.variant} не запустилась ({reason}), откат на "
             f"{target.variant} тоже не удался.",
+            "rollback.failed",
+            {"variant": target.variant, "failed": failed.variant, "reason": reason},
         )
 
     def _on_download_event(self, event: dict[str, Any]) -> None:
@@ -300,11 +360,19 @@ class Supervisor:
         async with self._lock:
             await self.process.stop()
             self._deploying = cfg.variant
-            self._set_status("starting", "Перезапускаю движок для нового глоссария")
+            self._set_status(
+                "starting", "Перезапускаю движок для нового глоссария", "glossary.restarting"
+            )
             if await self._start_and_wait(cfg, STARTUP_TIMEOUT):
-                self._set_status("ready", f"Готово: {cfg.variant}")
+                self._set_status(
+                    "ready", f"Готово: {cfg.variant}", "deploy.ready", {"variant": cfg.variant}
+                )
                 return True
-            self._set_status("error", "Не удалось перезапустить движок после правки глоссария")
+            self._set_status(
+                "error",
+                "Не удалось перезапустить движок после правки глоссария",
+                "glossary.restart_failed",
+            )
             return False
 
     # ------------------------------------------------------------------ lifecycle
@@ -312,11 +380,13 @@ class Supervisor:
     async def restore_on_boot(self) -> None:
         self._warn_about_env_divergence()
         if not self.settings.autostart:
-            self._set_status("stopped", "Автозапуск отключён (AUTOSTART=0)")
+            self._set_status("stopped", "Автозапуск отключён (AUTOSTART=0)", "idle.autostart_off")
             return
         target = self._desired or self._last_good
         if target is None:
-            self._set_status("stopped", "Модель не выбрана — нажмите «Развернуть»")
+            self._set_status(
+                "stopped", "Модель не выбрана — нажмите «Развернуть»", "idle.no_model"
+            )
             return
         self.bus.publish_log(f"restoring last deployment: {target.variant}")
         await self.deploy(target)
@@ -343,7 +413,7 @@ class Supervisor:
     async def stop_engine(self) -> None:
         async with self._lock:
             await self.process.stop()
-            self._set_status("stopped", "Движок остановлен")
+            self._set_status("stopped", "Движок остановлен", "idle.stopped")
 
     async def shutdown(self) -> None:
         self._shutting_down = True
@@ -360,7 +430,12 @@ class Supervisor:
         if self._shutting_down:
             return
         self.restart_count += 1
-        self._set_status("error", f"Движок неожиданно завершился (код {code}), поднимаю заново")
+        self._set_status(
+            "error",
+            f"Движок неожиданно завершился (код {code}), поднимаю заново",
+            "watchdog.exited",
+            {"code": code},
+        )
         if self._restart_task is None or self._restart_task.done():
             self._restart_task = asyncio.create_task(self._restart_loop())
 
@@ -381,15 +456,27 @@ class Supervisor:
                 if self.process.is_running:
                     return
                 self._deploying = cfg.variant
-                self._set_status("starting", f"Поднимаю движок заново ({cfg.variant})")
+                self._set_status(
+                    "starting",
+                    f"Поднимаю движок заново ({cfg.variant})",
+                    "watchdog.restarting",
+                    {"variant": cfg.variant},
+                )
                 if await self._start_and_wait(cfg, STARTUP_TIMEOUT):
                     self._consecutive_failures = 0
                     self._backoff_index = 0
-                    self._set_status("ready", f"Готово: {cfg.variant} (после перезапуска)")
+                    self._set_status(
+                        "ready",
+                        f"Готово: {cfg.variant} (после перезапуска)",
+                        "watchdog.ready",
+                        {"variant": cfg.variant},
+                    )
                     return
                 self._consecutive_failures += 1
                 self._backoff_index += 1
                 self._set_status(
                     "error",
                     f"Движок не поднялся (попытка {self._consecutive_failures}), пробую снова",
+                    "watchdog.failed",
+                    {"attempt": self._consecutive_failures},
                 )

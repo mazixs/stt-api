@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .auth import require_api_key
-from .catalog import HEADS, is_downloaded
+from .catalog import DEFAULT_LANG, HEADS, LANGS, is_downloaded, pick
 from .errors import ApiError
 from .glossary import parse_context, read_glossary
 from .proxy import (
@@ -93,7 +93,12 @@ def _status_payload(request: Request) -> dict[str, Any]:
     current = supervisor.current
     return {
         "status": supervisor.status,
+        # `detail` - готовая строка по-русски, она же идет в логи. `detail_code` и
+        # `detail_params` - то же самое машиночитаемо, чтобы консоль показала фразу
+        # на выбранном языке, а не переводила текст обратно.
         "detail": supervisor.detail,
+        "detail_code": supervisor.detail_code,
+        "detail_params": supervisor.detail_params,
         "download_percent": supervisor.download_percent,
         # Цель развертывания, а не работающий процесс: консоль рисует прогресс на
         # карточке той головы, которую разворачивают, и до первого запуска процесса нет.
@@ -133,20 +138,29 @@ async def status(request: Request) -> dict[str, Any]:
 
 
 @admin.get("/models")
-async def models(request: Request) -> dict[str, Any]:
+async def models(request: Request, lang: str = DEFAULT_LANG) -> dict[str, Any]:
+    """Каталог голов на языке интерфейса.
+
+    Переводятся только пояснения: идентификаторы, названия моделей и коды языков
+    одинаковы везде. Неизвестный `lang` молча становится английским - выбор языка
+    в интерфейсе не повод отвечать ошибкой.
+    """
     settings = request.app.state.settings
     current = request.app.state.supervisor.current
+    if lang not in LANGS:
+        lang = DEFAULT_LANG
     return {
+        "lang": lang,
         "heads": [
             {
                 "id": head.id,
                 "title": head.title,
-                "subtitle": head.subtitle,
+                "subtitle": pick(head.subtitle, lang),
                 "languages": list(head.languages),
                 "native_punctuation": head.native_punctuation,
                 "size_mb": head.size_mb,
-                "badge": head.badge,
-                "badge_note": head.badge_note,
+                "badge": pick(head.badge, lang),
+                "badge_note": pick(head.badge_note, lang),
                 "downloaded": is_downloaded(head.id, settings.model_dir),
                 "deployed": current is not None and current.variant == head.id,
             }
