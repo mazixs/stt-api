@@ -444,7 +444,7 @@ async function stopEngine() {
    ту, что словарь развёрнутой головы написать не может, движок молча выбросит, и она
    показана зачёркнутой. Отдельного списка отброшенных больше нет — он и есть список. */
 
-const glossary = { entries: [], applied: "", dropped: new Set(), envMissing: [] };
+const glossary = { entries: [], applied: "", dropped: new Set(), envMissing: [], issues: [] };
 
 const fold = (phrase) => phrase.toLowerCase().replace(/ё/g, "е");
 
@@ -452,6 +452,7 @@ async function loadGlossary(keepEdits) {
   try {
     const payload = await api("/api/glossary");
     glossary.dropped = new Set((payload.dropped || []).map(fold));
+    glossary.issues = payload.issues || [];
     if (!keepEdits) {
       glossary.entries = parseGlossary(payload.text);
       glossary.applied = glossaryText();
@@ -488,7 +489,37 @@ function renderGlossary(payload) {
   $("glossary-count").textContent = phraseCount(glossary.entries.length);
   $("btn-glossary").disabled = glossaryText() === glossary.applied;
   renderReach(payload);
+  renderIssues();
   renderEnvMissing(payload);
+}
+
+/* Чего человек не просил, но получит. Синтаксис `Фраза|8` выглядит как сила
+   подсказки, а движок читает вес как выключатель: ноль и меньше выбрасывает
+   фразу, любое положительное значение равно единице. Ещё строка с `#` уходит у
+   него в комментарий. Ничего из этого из файла не видно, поэтому сервер отдаёт
+   коды, а здесь они превращаются в фразы на языке интерфейса — по строке на
+   причину, со списком затронутых фраз, чтобы шесть предупреждений об одном и том
+   же не выстроились в столбик.
+
+   Список описывает применённый глоссарий, а не то, что сейчас набрано в поле:
+   он приходит с сервера и обновляется после «Применить». Так и честнее — до
+   применения движок ничего из этого ещё не сделал. */
+
+function renderIssues() {
+  const box = $("glossary-issues");
+  box.textContent = "";
+  const byCode = new Map();
+  for (const issue of glossary.issues || []) {
+    if (!byCode.has(issue.code)) byCode.set(issue.code, []);
+    byCode.get(issue.code).push(issue.phrase);
+  }
+  box.classList.toggle("hidden", byCode.size === 0);
+  for (const [code, phrases] of byCode) {
+    const line = document.createElement("p");
+    line.className = "detail";
+    line.textContent = t("issue." + code, { list: phrases.join(", ") });
+    box.appendChild(line);
+  }
 }
 
 /* INITIAL_CONTEXT читается один раз, при создании файла глоссария, — дальше правки в
@@ -651,6 +682,13 @@ async function sendGlossary(text, note) {
       ? note || t("glossary.applied")
       : t("glossary.applyFailed");
     await loadGlossary();
+    // Ответ на правку знает о ней больше, чем последующее чтение файла: файл не
+    // хранит ни неразобранный вес, ни табуляцию. Поэтому список претензий из
+    // POST сильнее того, что вернул GET, и перекрывает его.
+    if (payload.issues) {
+      glossary.issues = payload.issues;
+      renderIssues();
+    }
     return payload.count;
   } catch (err) {
     hint.textContent = err.message;
@@ -962,7 +1000,7 @@ function renderRichTexts() {
     mlctc: code("ml_ctc"),
     mlctcLarge: code("ml_ctc_large"),
   });
-  rich($("glossary-intro"), "glossary.intro", { example: code(t("glossary.example")) });
+  rich($("glossary-intro"), "glossary.intro", {});
   rich($("connect-intro"), "connect.intro", { prompt: code("prompt") });
 
   // Ссылка на схему живёт в разметке и переносится в новый абзац как есть:

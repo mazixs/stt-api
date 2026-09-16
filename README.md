@@ -178,12 +178,24 @@ is commented out in the sample and has to be uncommented):
 INITIAL_CONTEXT=АйМоп, GigaAM|8, Петр Иванович Сидоров
 ```
 
-Separators are a comma or a newline, a phrase weight follows a vertical bar, and the
-overall strength of the hint is `HOTWORDS_BOOST`. This is hotword biasing: the hint
-works during decoding, not as a post-edit of finished text. Edits apply without
-restarting the engine, which re-reads the list in place. Import, export and adding a
-single phrase live in the console; take a copy from time to time, since the list lives
-in the `data/` volume and has no second home.
+Separators are a comma or a newline, and the overall strength of the hint is
+`HOTWORDS_BOOST`. This is hotword biasing: the hint works during decoding, not as a
+post-edit of finished text. Edits apply without restarting the engine, which re-reads
+the list in place. Import, export and adding a single phrase live in the console; take
+a copy from time to time, since the list lives in the `data/` volume and has no second
+home.
+
+**Put in what the engine gets wrong, not everything you say.** A phrase it already
+writes correctly adds nothing and gives it one more thing to guess with; a list of a
+whole field's terminology starts pulling ordinary speech towards itself. Very short
+phrases are the worst offenders, because they win close calls they were never meant to
+enter.
+
+**The per-phrase weight after a vertical bar is a switch, not a dial.** Engine 2.21.0
+keeps one boost for the whole trie: anything above zero behaves exactly like `1`, and
+zero or less removes the phrase from biasing altogether. `GigaAM|8` and `GigaAM|0.5`
+are the same phrase; `GigaAM|0` is no phrase at all. The console says so beneath the
+list rather than letting the syntax imply a strength that does not exist.
 
 **A phrase is dropped if the head cannot write it.** Case is not the issue - the engine
 tries the phrase both as written and in lowercase - but a foreign alphabet is fatal:

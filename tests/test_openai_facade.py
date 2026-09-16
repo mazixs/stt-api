@@ -147,3 +147,44 @@ async def test_formats_the_engine_supports_reach_it_byte_for_byte(client_ready):
     assert upload["magic"] == "RIFF"
     assert upload["filename"] == "a.wav"
     assert upload["size"] == len(payload)
+
+
+# --------------------------------------------- словарь клиента, который не дошел
+#
+# Клиенты диктовки из мира Whisper кладут пользовательский словарь в `prompt` и
+# на самохостный адрес шлют его вслепую. Движок - трансдьюсер, `prompt` он
+# принимает и не читает, а 200 без единого признака этого означало бы, что
+# словарь клиента молча не работает. Заголовок - единственный канал до чужого
+# приложения, поэтому он проверяется как часть контракта.
+
+
+async def test_prompt_is_answered_with_a_header_saying_it_was_ignored(client_ready):
+    response = await client_ready.post(
+        "/v1/audio/transcriptions", files=AUDIO, data={"prompt": "АйМоп, GigaAM"}
+    )
+    assert response.status_code == 200
+    assert response.headers["x-ignored-fields"] == "prompt"
+    assert response.headers["x-glossary-source"] == "server-hotwords"
+
+
+async def test_request_without_a_prompt_carries_no_such_headers(client_ready):
+    response = await client_ready.post("/v1/audio/transcriptions", files=AUDIO)
+    assert response.status_code == 200
+    assert "x-ignored-fields" not in response.headers
+
+
+async def test_blank_prompt_is_not_worth_a_warning(client_ready):
+    response = await client_ready.post(
+        "/v1/audio/transcriptions", files=AUDIO, data={"prompt": "   "}
+    )
+    assert "x-ignored-fields" not in response.headers
+
+
+async def test_ignored_prompt_is_logged_once_not_on_every_request(client_ready):
+    for _ in range(3):
+        await client_ready.post(
+            "/v1/audio/transcriptions", files=AUDIO, data={"prompt": "АйМоп"}
+        )
+    bus = client_ready.app.state.bus
+    warnings = [line for line in bus.log_lines(limit=200) if "client sent prompt" in line]
+    assert len(warnings) == 1

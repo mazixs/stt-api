@@ -311,6 +311,13 @@ select:focus-visible, textarea:focus-visible,
 .reach-line { margin: 10px 0 0; font-size: 12.5px; color: var(--green); }
 .reach-line[data-loss="true"] { color: var(--brick); }
 .reach-line:empty { display: none; }
+
+/* Предупреждения про вес и формат: тем же кирпичным, что и потеря фраз, -
+   это про то же самое, про фразы, которые до движка не доходят или доходят
+   не так, как человек рассчитывал. */
+.glossary-issues { margin: 10px 0 0; }
+.glossary-issues p { margin: 4px 0 0; font-size: 12.5px; color: var(--brick); }
+.glossary-issues.hidden { display: none; }
 #dropped-hint { margin: 6px 0 0; }
 #dropped-hint:empty { display: none; }
 

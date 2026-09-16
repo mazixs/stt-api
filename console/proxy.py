@@ -24,6 +24,15 @@ from .webminfo import webm_duration_seconds
 router = APIRouter(dependencies=[Depends(require_api_key)])
 
 TRANSCRIBE_TIMEOUT = httpx.Timeout(None, connect=10.0)
+
+# Поля, которые клиент присылает, а движок не читает. `prompt` здесь не мелочь:
+# у Whisper это и есть носитель пользовательского словаря, и клиенты диктовки
+# (OpenWhispr и родня) шлют его на любой самохостный адрес, считая нас
+# Whisper-семейством. Движок - трансдьюсер, контекст задается глоссарием на
+# сервере, и молчаливое 200 в ответ означало бы, что словарь клиента не работает
+# и никто об этом не узнает. Заголовок - единственный канал до чужого приложения.
+IGNORED_FIELDS = ("prompt",)
+GLOSSARY_SOURCE = "server-hotwords"
 HOP_BY_HOP = {
     "content-length",
     "transfer-encoding",
@@ -97,6 +106,39 @@ def _too_big(limit: int) -> str:
     )
 
 
+def ignored_field_headers(fields: dict[str, str]) -> dict[str, str]:
+    """Заголовки ответа про поля запроса, которые никуда не дошли.
+
+    Пусто, когда таких полей нет: обвешивать заголовками каждый ответ ради
+    сообщения, которое почти всегда неприменимо, значило бы приучить его
+    игнорировать.
+    """
+    ignored = [name for name in IGNORED_FIELDS if fields.get(name, "").strip()]
+    if not ignored:
+        return {}
+    return {
+        "X-Ignored-Fields": ", ".join(ignored),
+        "X-Glossary-Source": GLOSSARY_SOURCE,
+    }
+
+
+def _warn_once(request: Request, ignored: str) -> None:
+    """Одна строка в логи на весь процесс, а не на каждый запрос.
+
+    Клиент, настроенный слать словарь в `prompt`, шлет его всегда, и запись на
+    каждую диктовку превратила бы раздел «Логи» в один повторяющийся абзац -
+    ровно тот способ, которым предупреждение перестает читаться.
+    """
+    state = request.app.state
+    if getattr(state, "ignored_fields_warned", False):
+        return
+    state.ignored_fields_warned = True
+    state.bus.publish_log(
+        f"client sent {ignored}: the engine ignores it, "
+        "the glossary is configured on the server"
+    )
+
+
 async def forward_transcription(
     request: Request,
     path: str = "/v1/audio/transcriptions",
@@ -146,6 +188,10 @@ async def forward_transcription(
         for key, value in response.headers.items()
         if key.lower() not in HOP_BY_HOP
     }
+    ignored = ignored_field_headers(fields)
+    if ignored:
+        _warn_once(request, ignored["X-Ignored-Fields"])
+    headers.update(ignored)
     return StreamingResponse(
         body(),
         status_code=response.status_code,

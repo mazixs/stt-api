@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from .auth import require_api_key
 from .catalog import DEFAULT_LANG, HEADS, LANGS, is_downloaded, pick
 from .errors import ApiError
-from .glossary import parse_context, read_glossary
+from .glossary import entry_issues, parse_context, read_glossary
 from .proxy import (
     TRANSCRIBE_TIMEOUT,
     read_upload,
@@ -214,6 +214,11 @@ async def glossary_get(request: Request) -> dict[str, Any]:
         # Фразы из INITIAL_CONTEXT, которых в списке нет: `.env` читается один раз, при
         # создании файла, поэтому дальше расхождение видно только так.
         "env_missing": supervisor.initial_context_missing(),
+        # Что движок сделает с фразой помимо того, о чем его просили: вес <= 0
+        # выбрасывает фразу, любой положительный вес равен единице, строка с `#`
+        # читается как комментарий. Коды, а не фразы: формулировку выбирает
+        # консоль на своем языке.
+        "issues": entry_issues(text),
         "approximate": alphabet is not None and alphabet.subword,
         # What this head can spell, so the advice is read off the vocabulary on disk
         # instead of a rule that is wrong for some head: `e2e_rnnt` writes Latin and
@@ -234,7 +239,15 @@ async def glossary_get(request: Request) -> dict[str, Any]:
 async def glossary_post(request: Request, body: GlossaryRequest) -> dict[str, Any]:
     supervisor = request.app.state.supervisor
     applied = await supervisor.apply_glossary(body.text)
-    return {"count": supervisor.glossary_count, "applied": applied}
+    # Претензии считаются по присланному тексту, а не по сохраненному файлу:
+    # файл часть из них не переживает. Неразобранный вес в нем неотличим от
+    # отсутствующего, а табуляцию `render_hotwords` убирает, иначе она разрезала
+    # бы строку. Сказать об этом можно только здесь, в ответ на саму правку.
+    return {
+        "count": supervisor.glossary_count,
+        "applied": applied,
+        "issues": entry_issues(body.text),
+    }
 
 
 @admin.get("/events")

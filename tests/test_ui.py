@@ -275,3 +275,29 @@ async def test_head_descriptions_come_translated_from_the_server(client_ready):
     # Названия моделей не переводятся, переводятся только пояснения.
     assert ru_by_id["e2e_rnnt"]["title"] == by_id["e2e_rnnt"]["title"]
     assert unknown["heads"] == english["heads"]  # неизвестный язык - английский
+
+
+async def test_glossary_warnings_are_rendered_and_translated(client_ready):
+    """Коды с сервера превращаются в фразы здесь, значит нужны в обоих словарях."""
+    js = (await client_ready.get("/static/app.js")).text
+    assert 't("issue." + code' in js
+    assert 'id="glossary-issues"' in (await client_ready.get("/")).text
+
+    texts = (await client_ready.get("/static/i18n.js")).text
+    blocks = re.findall(r"\n  (en|ru): \{(.*?)\n  \},", texts, re.S)
+    keys = {name: set(re.findall(r'"([\w.]+)":', body)) for name, body in blocks}
+    for code in ("weight_off", "weight_ignored", "weight_invalid", "comment", "tab", "short"):
+        assert f"issue.{code}" in keys["en"]
+        assert f"issue.{code}" in keys["ru"]
+
+
+async def test_glossary_intro_states_the_selection_rule_not_the_weight_syntax(client_ready):
+    """Главное правило всех источников - добавлять только то, что движок не берёт.
+
+    Про вес интерфейс больше ничего не обещает: движок читает его как
+    выключатель, и старая подпись «вес подсказки» обещала силу, которой нет.
+    """
+    texts = (await client_ready.get("/static/i18n.js")).text
+    en = re.search(r'"glossary\.intro":\s*\n?\s*"([^"]*)"', texts).group(1)
+    assert "gets wrong without help" in en
+    assert "vertical bar" not in en

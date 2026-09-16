@@ -289,3 +289,42 @@ async def test_status_reports_window_concurrency(client_ready):
     body = (await client_ready.get("/api/status")).json()
     assert body["engine"]["file_window_concurrency"] == 1
     assert body["defaults"]["file_window_concurrency"] == 1
+
+
+async def test_glossary_reports_what_the_engine_will_do_with_the_weights(client_ready):
+    await client_ready.post("/api/glossary", json={"text": "АйМоп|8, GigaAM|0, Кубернетес"})
+    body = (await client_ready.get("/api/glossary")).json()
+    assert body["issues"] == [
+        {"phrase": "АйМоп", "code": "weight_ignored"},
+        {"phrase": "GigaAM", "code": "weight_off"},
+    ]
+
+
+async def test_glossary_without_surprises_reports_no_issues(client_ready):
+    await client_ready.post("/api/glossary", json={"text": "АйМоп, GigaAM"})
+    body = (await client_ready.get("/api/glossary")).json()
+    assert body["issues"] == []
+
+
+async def test_applying_a_glossary_answers_with_what_the_file_will_not_keep(client_ready):
+    """Неразобранный вес и табуляцию файл теряет, сказать о них можно только тут."""
+    response = await client_ready.post(
+        "/api/glossary", json={"text": "Кубернетес|много, АйМоп\tМоп"}
+    )
+    assert response.json()["issues"] == [
+        {"phrase": "Кубернетес", "code": "weight_invalid"},
+        {"phrase": "АйМоп\tМоп", "code": "tab"},
+    ]
+
+    # И действительно теряет: чтение того же глоссария о них уже не знает.
+    assert (await client_ready.get("/api/glossary")).json()["issues"] == []
+
+
+async def test_applied_glossary_keeps_reporting_what_survives_the_file(client_ready):
+    """Вес-выключатель, комментарий и короткая фраза переживают запись и чтение."""
+    await client_ready.post("/api/glossary", json={"text": "GigaAM|0, #тег, ИИ"})
+    assert (await client_ready.get("/api/glossary")).json()["issues"] == [
+        {"phrase": "GigaAM", "code": "weight_off"},
+        {"phrase": "#тег", "code": "comment"},
+        {"phrase": "ИИ", "code": "short"},
+    ]

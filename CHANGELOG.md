@@ -30,9 +30,27 @@ at `/api/openapi.json` (`info.version`) read it from there.
 - Static assets are fingerprinted (`?v=<hash>`), so a changed `i18n.js`, `app.js` or
   `style.css` is picked up without a hard reload.
 
+- The console says what the engine will do with a glossary phrase beyond what was
+  asked: a weight of zero or less removes the phrase from biasing, any positive weight
+  behaves like `1`, a phrase starting with `#` is read as a comment, a tab inside a
+  phrase is replaced with a space, and a very short phrase is flagged as a false-trigger
+  risk. `GET`/`POST /api/glossary` return these as machine-readable codes in `issues`.
+- A transcription request carrying `prompt` is answered with `X-Ignored-Fields: prompt`
+  and `X-Glossary-Source: server-hotwords`, plus one log line per process. Whisper-era
+  dictation clients put their own dictionary in that field and send it to any
+  self-hosted endpoint; the engine is a transducer and never reads it.
+
+### Fixed
+
+- A glossary phrase containing a tab or a newline no longer corrupts the engine's
+  hotwords file, where a tab means "weight follows" and a newline means "next phrase".
+
 ### Notes
 
 - `detail` keeps its Russian wording on purpose: it is also the log line.
+- The per-phrase weight after a vertical bar is a switch, not a dial: engine 2.21.0
+  keeps one boost for the whole trie. The syntax is unchanged, the console no longer
+  implies a strength that does not exist.
 
 ## [1.4.0] - 2026-09-05
 
