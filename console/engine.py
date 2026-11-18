@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import signal
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -20,6 +21,28 @@ from .state import EngineConfig
 
 class EngineStartupError(RuntimeError):
     pass
+
+
+async def wait_uninterrupted[T](task: asyncio.Future[T]) -> T:
+    """Не освобождать ресурсы операции, пока она работает, даже при отмене запроса."""
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+    result = task.result()
+    if cancelled:
+        raise asyncio.CancelledError
+    return result
+
+
+def build_compare_argv(settings: Settings, audio: Path, model_dir: Path, variant: str, output: Path) -> list[str]:
+    return engine_command(
+        settings, "transcribe", str(audio), "--offline", "--model-dir", str(model_dir),
+        "--model-variant", variant, "--file-window-concurrency", "1",
+        "--punctuation", "off", "--itn", "off", "--format", "json", "--output", str(output),
+    )
 
 
 def build_argv(settings: Settings, cfg: EngineConfig) -> list[str]:
@@ -162,7 +185,7 @@ class EngineProcess:
         if not self.is_running:
             return None
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
                 response = await client.get(f"{self.settings.engine_base_url}/health")
             if response.status_code != 200:
                 return None
@@ -193,7 +216,7 @@ class EngineProcess:
         if not self.is_running:
             return False
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
                 response = await client.post(f"{self.settings.engine_base_url}/v1/admin/reload")
             return response.status_code == 200
         except httpx.HTTPError:

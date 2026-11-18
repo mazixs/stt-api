@@ -1,6 +1,9 @@
+import asyncio
 import json
+from unittest.mock import AsyncMock
 
-from conftest import wav_bytes, wait_for
+import pytest
+from conftest import _client, wav_bytes, wait_for
 
 AUDIO = {"file": ("a.wav", wav_bytes(seconds=2), "audio/wav")}
 
@@ -188,6 +191,53 @@ async def test_totals_outlive_the_console_process(console_settings):
     finally:
         await second.app.state.supervisor.shutdown()
         await second.aclose()
+
+
+async def test_shutdown_reaps_download_and_drops_queued_deploy(console_settings, monkeypatch):
+    console_settings.autostart = False
+    monkeypatch.setenv("FAKE_DOWNLOAD_SLOW", "60")
+    children = []
+    spawn = asyncio.create_subprocess_exec
+
+    async def tracked(*args, **kwargs):
+        process = await spawn(*args, **kwargs)
+        children.append(process)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", tracked)
+    async with await _client(console_settings) as client:
+        app = client.app
+        pending = []
+        async with app.router.lifespan_context(app):
+            for variant in ("rnnt", "e2e_rnnt"):
+                assert (await client.post("/api/deploy", json={"variant": variant})).status_code == 202
+                pending.append(app.state.deploy_task)
+            await wait_for(lambda: app.state.supervisor.download_percent is not None)
+        assert all(task.cancelled() for task in pending)
+        assert len(children) == 1 and children[0].returncode is not None
+        assert not app.state.supervisor.process.is_running
+
+
+async def test_restore_error_does_not_skip_process_cleanup(client_stopped, monkeypatch):
+    app = client_stopped.app
+    supervisor = app.state.supervisor
+    monkeypatch.setattr(supervisor, "restore_on_boot", AsyncMock(side_effect=OSError("test")))
+    shutdown = AsyncMock(wraps=supervisor.shutdown)
+    monkeypatch.setattr(supervisor, "shutdown", shutdown)
+    with pytest.raises(OSError, match="test"):
+        async with app.router.lifespan_context(app):
+            await asyncio.sleep(0)
+    shutdown.assert_awaited_once()
+
+
+async def test_health_hides_private_error_details(client_ready_with_key):
+    supervisor = client_ready_with_key.app.state.supervisor
+    supervisor._set_status("error", "private/path", "start.failed")
+    public = await client_ready_with_key.get("/health")
+    assert public.status_code == 200 and "private/path" not in public.text
+    assert public.json()["engine_detail_code"] == "start.failed"
+    admin = await client_ready_with_key.get("/api/status", headers={"Authorization": "Bearer secret"})
+    assert admin.json()["detail"] == "private/path"
 
 
 async def test_health_reports_engine_state_but_stays_200(client_stopped):

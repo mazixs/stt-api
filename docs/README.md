@@ -5,6 +5,8 @@
 | [product.md](product.md) | Для кого сервис, какие рамки и чего он не делает |
 | [decisions.md](decisions.md) | Технические решения с обоснованием, свежие сверху |
 | [research/head-choice-and-wer.md](research/head-choice-and-wer.md) | Выбор головы, замеры WER, наши ошибки в методе |
+| [research/long-form-seams.md](research/long-form-seams.md) | Как склейка окон меняет текст длинной записи |
+| [stt-event-log.md](stt-event-log.md) | Какие события попадают в журнал и какие данные он не хранит |
 | [open-questions.md](open-questions.md) | Что осталось незакрытым и что с этим делать |
 | [manual-smoke.md](manual-smoke.md) | Ручной сценарий проверки на живом движке |
 

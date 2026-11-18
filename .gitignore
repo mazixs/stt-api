@@ -38,7 +38,7 @@ htmlcov/
 
 # Инструменты и редакторы
 .playwright-mcp/
-.claude/settings.local.json
+.claude/
 .idea/
 .vscode/
 .DS_Store
@@ -50,5 +50,11 @@ AGENTS.md
 .codex/
 .gemini/
 
-# рабочие планы агентов, не для публичного дерева
-docs/superpowers/
+.agents/
+/skills-lock.json
+/docs/superpowers/
+
+# Локальные дизайн-макеты и копии глоссария из ручной проверки.
+/design-demos/
+/hotwords.bak
+/restore.json

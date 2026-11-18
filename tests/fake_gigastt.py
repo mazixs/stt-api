@@ -5,6 +5,7 @@ Implements just enough of the upstream CLI contract for the console's tests:
 
     fake_gigastt.py download --model-dir D --model-variant V --progress json
     fake_gigastt.py serve --host H --port P --model-variant V ...
+    fake_gigastt.py transcribe FILE --offline --model-dir D --model-variant V --format json --output O ...
 
 Behaviour is steered by environment variables:
 
@@ -20,13 +21,16 @@ Behaviour is steered by environment variables:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import sys
 import threading
 import time
+import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 HEAD_FILES = {
     "rnnt": (
@@ -147,6 +151,16 @@ class Handler(BaseHTTPRequestHandler):
         body = self.rfile.read(length) if length else b""
         if self.path == "/v1/admin/reload" or self.path.startswith("/v1/admin/reload?"):
             Handler.reloads += 1
+            if release := os.environ.get("FAKE_RELOAD_RELEASE"):
+                deadline = time.monotonic() + 30
+                while not Path(release).exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self._json(202, {
+                    "path": self.path,
+                    "body": body.decode(),
+                    "header": self.headers.get("x-reload-test"),
+                })
+                return
             self._json(200, {"status": "ok"})
             return
         if self.path.startswith("/v1/audio/transcriptions") or self.path.startswith(
@@ -269,6 +283,40 @@ def cmd_serve(args: argparse.Namespace, argv: list[str]) -> int:
     return 0
 
 
+def cmd_transcribe(args: argparse.Namespace) -> int:
+    model_dir = Path(args.model_dir)
+    if (
+        not args.offline or args.format != "json"
+        or sorted(p.name for p in model_dir.iterdir()) != sorted(HEAD_FILES[args.model_variant])
+    ):
+        return 1
+
+    def record(phase):
+        if path := os.environ.get("FAKE_COMPARE_RECORD"):
+            with open(path, "a", encoding="utf-8") as stream:
+                stream.write(json.dumps({
+                    "phase": phase,
+                    "variant": args.model_variant,
+                    "audio": args.file,
+                    "sha256": hashlib.sha256(Path(args.file).read_bytes()).hexdigest(),
+                    "model_dir": args.model_dir,
+                }) + "\n")
+
+    record("start")
+    time.sleep(float(os.environ.get("FAKE_COMPARE_DELAY", "0")))
+    if os.environ.get("FAKE_COMPARE_FAIL") == args.model_variant:
+        print(os.environ.get("FAKE_COMPARE_ERROR", "fake failure"), file=sys.stderr)
+        return 1
+
+    with wave.open(args.file, "rb") as audio:
+        duration = audio.getnframes() / audio.getframerate()
+    Path(args.output).write_text(json.dumps({
+        "text": f"привет от {args.model_variant}", "duration": duration,
+    }, ensure_ascii=False), encoding="utf-8")
+    record("done")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
@@ -284,9 +332,22 @@ def main() -> int:
     serve.add_argument("--model-dir", default=".")
     serve.add_argument("--model-variant", default="rnnt")
 
+    transcribe = sub.add_parser("transcribe")
+    transcribe.add_argument("file")
+    transcribe.add_argument("--offline", action="store_true")
+    transcribe.add_argument("--model-dir", required=True)
+    transcribe.add_argument("--model-variant", choices=HEAD_FILES, required=True)
+    transcribe.add_argument("--file-window-concurrency", choices=["1"], required=True)
+    transcribe.add_argument("--punctuation", choices=["off"], required=True)
+    transcribe.add_argument("--itn", choices=["off"], required=True)
+    transcribe.add_argument("--format", required=True)
+    transcribe.add_argument("--output", required=True)
+
     args, _unknown = parser.parse_known_args()
     if args.command == "download":
         return cmd_download(args)
+    if args.command == "transcribe":
+        return cmd_transcribe(args)
     return cmd_serve(args, sys.argv[1:])
 
 

@@ -5,18 +5,20 @@ services:
       args:
         # Закреплённая версия движка. Второй раз она встречается только в Dockerfile
         # (запас для прямого `docker build`) и меняется тем же коммитом.
-        GIGASTT_TAG: ${GIGASTT_TAG:-2.21.0}
+        GIGASTT_TAG: ${GIGASTT_TAG:-2.22.0}
     image: stt-api-console:latest
     container_name: stt-api
     # Docker's init reaps the engine process if the console ever dies unexpectedly.
     init: true
+    # 15 с Uvicorn на завершение запросов плюс запас на уборку и остановку движка.
+    stop_grace_period: 45s
     restart: unless-stopped
     env_file:
       - path: .env
         required: false
     ports:
-      # Слева — порт на сервере, справа — порт внутри контейнера (не меняйте).
-      - "${HOST_PORT:-8091}:8080"
+      # По умолчанию только сам хост. Для доступа из сети укажите HOST_BIND и API_KEY.
+      - "${HOST_BIND:-127.0.0.1}:${HOST_PORT:-8091}:8080"
     volumes:
       - ./data:/data      # состояние, глоссарий
       - ./models:/models  # веса моделей, ~250 МБ на голову

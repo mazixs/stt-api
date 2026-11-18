@@ -16,8 +16,8 @@ def test_splits_on_commas_and_newlines_and_trims():
 
 
 def test_keeps_multiword_phrases_intact():
-    assert parse_context("Пётр Иванович Сидоров, ай ти отдел") == [
-        ("Пётр Иванович Сидоров", None),
+    assert parse_context("Тёплый осенний вечер, ай ти отдел") == [
+        ("Тёплый осенний вечер", None),
         ("ай ти отдел", None),
     ]
 

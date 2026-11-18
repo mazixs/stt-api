@@ -82,7 +82,8 @@ async def health(request: Request) -> dict[str, Any]:
     return {
         "status": "ok",
         "engine_status": supervisor.status,
-        "engine_detail": supervisor.detail,
+        # Свободный текст ошибок, включая пути ОС, остаётся в закрытом /api/status.
+        "engine_detail_code": supervisor.detail_code,
         "variant": supervisor.current.variant if supervisor.current else None,
     }
 
@@ -129,6 +130,7 @@ def _status_payload(request: Request) -> dict[str, Any]:
         "restart_count": supervisor.restart_count,
         "uptime_seconds": int(time.monotonic() - STARTED_AT),
         "max_upload_mb": settings.max_upload_mb,
+        "compare_enabled": settings.compare_enabled,
     }
 
 
@@ -174,7 +176,10 @@ async def deploy(request: Request, body: DeployRequest) -> dict[str, Any]:
     supervisor = request.app.state.supervisor
     config = body.to_config(supervisor.default_config())
     task = asyncio.create_task(supervisor.deploy(config))
-    # Keep a reference so the task is not garbage collected mid-flight.
+    # При остановке надо дождаться и текущего развёртывания, и стоящих за ним.
+    pending = request.app.state.deploy_tasks
+    pending.add(task)
+    task.add_done_callback(pending.discard)
     request.app.state.deploy_task = task
     return {"status": "accepted", "config": config.to_dict()}
 
@@ -250,6 +255,12 @@ async def glossary_post(request: Request, body: GlossaryRequest) -> dict[str, An
     }
 
 
+@admin.get("/journal")
+async def journal(request: Request) -> dict[str, Any]:
+    """До 200 событий развёртывания и движка, новые сверху; только за жизнь процесса."""
+    return {"events": request.app.state.supervisor.journal.snapshot()}
+
+
 @admin.get("/events")
 async def events(request: Request) -> StreamingResponse:
     bus = request.app.state.bus
@@ -291,7 +302,7 @@ async def test_transcription(request: Request) -> JSONResponse:
     payload.update({k: v for k, v in fields.items() if k in ("language", "response_format")})
 
     try:
-        async with httpx.AsyncClient(timeout=TRANSCRIBE_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=TRANSCRIBE_TIMEOUT, trust_env=False) as client:
             response = await client.post(
                 f"{settings.engine_base_url}/v1/audio/transcriptions",
                 data=payload,

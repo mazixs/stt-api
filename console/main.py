@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__, proxy
 from .api import router as api_router
+from .compare import clean_compare_temp_root, router as compare_router
 from .errors import ApiError, api_error_handler
 from .events import EventBus
 from .metrics import Metrics
@@ -37,14 +38,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        try:
+            clean_compare_temp_root(settings)
+        except OSError:
+            settings.enable_model_compare = False
+            logging.getLogger("console").warning(
+                "Не удалось очистить временный каталог; сравнение моделей отключено."
+            )
         restore = asyncio.create_task(supervisor.restore_on_boot())
         try:
             yield
         finally:
-            restore.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await restore
-            await supervisor.shutdown()
+            pending = [restore, *app.state.deploy_tasks]
+            for task in pending:
+                task.cancel()
+            try:
+                await asyncio.gather(*pending, return_exceptions=True)
+                if not restore.cancelled():
+                    restore.result()
+            finally:
+                await supervisor.shutdown()
 
     app = FastAPI(
         title="GigaAM STT Console",
@@ -63,8 +76,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.metrics = metrics
     app.state.supervisor = supervisor
 
+    app.state.compare_lock = asyncio.Lock()
+    app.state.deploy_tasks = set()
+
     app.add_exception_handler(ApiError, api_error_handler)
     app.include_router(api_router)
+    app.include_router(compare_router)
     app.include_router(proxy.router)
 
     if STATIC_DIR.is_dir():

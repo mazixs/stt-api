@@ -9,12 +9,16 @@ Owns the answers to three questions the user cares about:
 
 import asyncio
 import contextlib
+from collections.abc import Callable, Coroutine
 from typing import Any
+from uuid import UUID, uuid4
 
 from .downloader import DownloadError, download
-from .engine import EngineProcess, EngineStartupError
+from .engine import EngineProcess, EngineStartupError, wait_uninterrupted
+from .errors import ApiError
 from .events import EventBus
 from .glossary import parse_context, read_glossary, write_hotwords
+from .journal import EventJournal
 from .settings import Settings
 from .state import EngineConfig, State, StateFile
 
@@ -36,6 +40,7 @@ class Supervisor:
     def __init__(self, settings: Settings, bus: EventBus) -> None:
         self.settings = settings
         self.bus = bus
+        self.journal = EventJournal()
         self.state_file = StateFile(settings.state_path)
         stored = self.state_file.load()
 
@@ -60,10 +65,14 @@ class Supervisor:
         self.restart_count = 0
         self._start_error = ""
         self._lock = asyncio.Lock()
+        self._comparison_task: asyncio.Task[Any] | None = None
+        self._native_reload_task: asyncio.Task[Any] | None = None
+        self._glossary_task: asyncio.Task[bool] | None = None
         self._shutting_down = False
         self._consecutive_failures = 0
         self._backoff_index = 0
         self._restart_task: asyncio.Task[None] | None = None
+        self._recovery_operation: UUID | None = None
 
     # ------------------------------------------------------------------ status
 
@@ -195,13 +204,77 @@ class Supervisor:
             }
         )
 
+    # ------------------------------------------------------------------ compare gate
+
+    @property
+    def comparison_allowed(self) -> bool:
+        recovering = self._restart_task is not None and not self._restart_task.done()
+        return not (self._shutting_down or self._lock.locked() or recovering)
+
+    def begin_comparison[T](
+        self, run: Callable[[], Coroutine[Any, Any, T]],
+    ) -> asyncio.Task[T] | None:
+        # Без await: проверка и регистрация неделимы относительно deploy/watchdog.
+        if not self.comparison_allowed or self._comparison_task is not None:
+            return None
+        task = asyncio.create_task(run())
+        self._comparison_task = task
+        task.add_done_callback(self._clear_comparison)
+        return task
+
+    def _clear_comparison(self, task: asyncio.Task[Any]) -> None:
+        if self._comparison_task is task:
+            self._comparison_task = None
+
+    async def _cancel_comparison(self) -> None:
+        if (task := self._comparison_task) is not None and not task.done():
+            task.cancel()
+            # Одной отмены мало: сначала дождаться kill/reap и удаления файлов.
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def run_native_reload[T](self, run: Callable[[], Coroutine[Any, Any, T]]) -> T | None:
+        if (active := self._native_reload_task) is not None and not active.done():
+            return None
+
+        async def locked() -> T:
+            async with self._lock:
+                if self._shutting_down:
+                    raise asyncio.CancelledError
+                await self._cancel_comparison()
+                try:
+                    return await run()
+                except asyncio.CancelledError:
+                    # Отмена HTTP не останавливает сборку: сначала завершить сам движок.
+                    if not self._shutting_down:
+                        await wait_uninterrupted(asyncio.create_task(self.process.stop()))
+                    raise
+
+        # Закрытие клиентского соединения не останавливает сборку ONNX в upstream.
+        task = asyncio.create_task(locked())
+        self._native_reload_task = task
+        task.add_done_callback(self._native_reload_done)
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.cancelled():
+                raise ApiError(503, "Перезагрузка прервана остановкой движка.", "engine_not_ready", "server_error") from None
+            raise
+
+    def _native_reload_done(self, task: asyncio.Task[Any]) -> None:
+        if self._native_reload_task is task:
+            self._native_reload_task = None
+        if not task.cancelled():
+            task.exception()  # У клиента, который ушёл, больше нет await этой задачи.
+
     # ------------------------------------------------------------------ deploy
 
     async def deploy(self, cfg: EngineConfig, startup_timeout: float = STARTUP_TIMEOUT) -> None:
         async with self._lock:
+            await self._cancel_comparison()
             await self._deploy_locked(cfg, startup_timeout)
 
     async def _deploy_locked(self, cfg: EngineConfig, startup_timeout: float) -> None:
+        operation_id = uuid4()
         self._desired = cfg
         self._deploying = cfg.variant
         self._download_percent = None
@@ -211,7 +284,8 @@ class Supervisor:
             "deploy.downloading",
             {"variant": cfg.variant},
         )
-        if not await self._download_with_retries(cfg):
+        self.journal.record("deploy.downloading", operation_id, variant=cfg.variant)
+        if not await self._download_with_retries(cfg, operation_id):
             return
         self._download_percent = None
 
@@ -223,6 +297,7 @@ class Supervisor:
             "deploy.starting",
             {"variant": cfg.variant},
         )
+        self.journal.record("deploy.starting", operation_id, variant=cfg.variant)
         started = await self._start_and_wait(cfg, startup_timeout)
         if started:
             self._last_good = cfg
@@ -231,10 +306,12 @@ class Supervisor:
             self._set_status(
                 "ready", f"Готово: {cfg.variant}", "deploy.ready", {"variant": cfg.variant}
             )
+            self.journal.record("deploy.ready", operation_id, variant=cfg.variant)
             return
-        await self._rollback(cfg, startup_timeout)
+        self.journal.record("start.failed", operation_id, variant=cfg.variant)
+        await self._rollback(cfg, startup_timeout, operation_id)
 
-    async def _download_with_retries(self, cfg: EngineConfig) -> bool:
+    async def _download_with_retries(self, cfg: EngineConfig, operation_id: UUID) -> bool:
         attempts = len(DOWNLOAD_RETRY_DELAYS) + 1
         for attempt in range(1, attempts + 1):
             try:
@@ -250,6 +327,14 @@ class Supervisor:
                         f"{exc.message} Пробую снова ({attempt + 1} из {attempts})…",
                         "download.retry",
                         {"kind": exc.kind, "attempt": attempt + 1, "attempts": attempts},
+                    )
+                    self.journal.record(
+                        "download.retry",
+                        operation_id,
+                        variant=cfg.variant,
+                        kind=exc.kind,
+                        attempt=attempt + 1,
+                        attempts=attempts,
                     )
                     await asyncio.sleep(delay)
                     continue
@@ -269,13 +354,27 @@ class Supervisor:
                         "running": running.variant if running else None,
                     },
                 )
+                self.journal.record(
+                    "download.failed",
+                    operation_id,
+                    variant=cfg.variant,
+                    kind=exc.kind,
+                    attempts=attempt,
+                    running=running.variant if running else None,
+                )
                 return False
         return False
 
     async def _start_and_wait(self, cfg: EngineConfig, timeout: float) -> bool:
+        await self._cancel_comparison()
         try:
             await self.process.start(cfg)
+            if self._shutting_down:
+                await self.process.stop()
+                return False
             await self.process.wait_healthy(timeout=timeout)
+            if not self.process.is_running:
+                raise EngineStartupError("Движок завершился сразу после проверки готовности.")
             return True
         except (EngineStartupError, OSError, RuntimeError) as exc:
             self.bus.publish_log(f"engine failed to start: {exc}")
@@ -283,7 +382,9 @@ class Supervisor:
             await self.process.stop()
             return False
 
-    async def _rollback(self, failed: EngineConfig, startup_timeout: float) -> None:
+    async def _rollback(
+        self, failed: EngineConfig, startup_timeout: float, operation_id: UUID
+    ) -> None:
         reason = self._start_error or "движок не запустился"
         target = self._last_good
         if target is None or target == failed:
@@ -301,6 +402,9 @@ class Supervisor:
             "rollback.starting",
             {"variant": target.variant},
         )
+        self.journal.record(
+            "rollback.starting", operation_id, variant=target.variant, failed=failed.variant
+        )
         if await self._start_and_wait(target, startup_timeout):
             self._desired = target
             self._set_status(
@@ -310,6 +414,9 @@ class Supervisor:
                 "rollback.done",
                 {"variant": target.variant, "failed": failed.variant, "reason": reason},
             )
+            self.journal.record(
+                "rollback.done", operation_id, variant=target.variant, failed=failed.variant
+            )
             return
         self._set_status(
             "error",
@@ -317,6 +424,9 @@ class Supervisor:
             f"{target.variant} тоже не удался.",
             "rollback.failed",
             {"variant": target.variant, "failed": failed.variant, "reason": reason},
+        )
+        self.journal.record(
+            "rollback.failed", operation_id, variant=target.variant, failed=failed.variant
         )
 
     def _on_download_event(self, event: dict[str, Any]) -> None:
@@ -348,32 +458,47 @@ class Supervisor:
     # ------------------------------------------------------------------ glossary
 
     async def apply_glossary(self, raw: str) -> bool:
+        async with self._lock:
+            if self._shutting_down:
+                return False
+            self._glossary_task = asyncio.create_task(self._apply_glossary_locked(raw))
+            try:
+                return await wait_uninterrupted(self._glossary_task)
+            finally:
+                self._glossary_task = None
+
+    async def _apply_glossary_locked(self, raw: str) -> bool:
         count = write_hotwords(self.settings.hotwords_path, raw)
         self.bus.publish_log(f"glossary updated: {count} phrases")
         if not self.process.is_running:
             return True
+        # Reload тоже создаёт новый пул ONNX-сессий до подмены старого.
+        await self._cancel_comparison()
         if await self.process.reload():
             self.bus.publish({"type": "glossary", "count": count})
             return True
+        if self._shutting_down:
+            return False
         self.bus.publish_log("engine reload failed, restarting the engine instead")
         cfg = self.process.config or self.default_config()
-        async with self._lock:
-            await self.process.stop()
-            self._deploying = cfg.variant
-            self._set_status(
-                "starting", "Перезапускаю движок для нового глоссария", "glossary.restarting"
-            )
-            if await self._start_and_wait(cfg, STARTUP_TIMEOUT):
-                self._set_status(
-                    "ready", f"Готово: {cfg.variant}", "deploy.ready", {"variant": cfg.variant}
-                )
-                return True
-            self._set_status(
-                "error",
-                "Не удалось перезапустить движок после правки глоссария",
-                "glossary.restart_failed",
-            )
+        await self.process.stop()
+        if self._shutting_down:
             return False
+        self._deploying = cfg.variant
+        self._set_status(
+            "starting", "Перезапускаю движок для нового глоссария", "glossary.restarting"
+        )
+        if await self._start_and_wait(cfg, STARTUP_TIMEOUT):
+            self._set_status(
+                "ready", f"Готово: {cfg.variant}", "deploy.ready", {"variant": cfg.variant}
+            )
+            return True
+        self._set_status(
+            "error",
+            "Не удалось перезапустить движок после правки глоссария",
+            "glossary.restart_failed",
+        )
+        return False
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -411,23 +536,49 @@ class Supervisor:
         )
 
     async def stop_engine(self) -> None:
+        await wait_uninterrupted(asyncio.create_task(self._stop_engine()))
+
+    async def _stop_engine(self) -> None:
+        interrupted = None
+        if (task := self._native_reload_task) is not None and not task.done():
+            interrupted = self.current
+            if not task.cancelling():
+                task.cancel()
         async with self._lock:
+            await self._cancel_recovery()
+            running = self.current or interrupted
             await self.process.stop()
             self._set_status("stopped", "Движок остановлен", "idle.stopped")
+            self.journal.record("idle.stopped", uuid4(), variant=running.variant if running else None)
 
-    async def shutdown(self) -> None:
-        self._shutting_down = True
+    async def _cancel_recovery(self) -> None:
         if self._restart_task is not None:
             self._restart_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._restart_task
             self._restart_task = None
-        await self.process.stop()
+        self._consecutive_failures = 0
+        self._backoff_index = 0
+
+    async def shutdown(self) -> None:
+        self._shutting_down = True
+        await self._cancel_comparison()
+        await self._cancel_recovery()
+        try:
+            await self.process.stop()
+        finally:
+            # С остановленным процессом больше нет сборки ONNX, которую нужно ждать.
+            if (task := self._native_reload_task) is not None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            if (glossary := self._glossary_task) is not None:
+                await asyncio.gather(glossary, return_exceptions=True)
 
     # ------------------------------------------------------------------ watchdog
 
     def _on_engine_exit(self, code: int) -> None:
-        if self._shutting_down:
+        # Сбой до готовности обрабатывает ветка запуска, а не отдельный сторож.
+        if self._shutting_down or self._status == "starting":
             return
         self.restart_count += 1
         self._set_status(
@@ -436,10 +587,17 @@ class Supervisor:
             "watchdog.exited",
             {"code": code},
         )
-        if self._restart_task is None or self._restart_task.done():
-            self._restart_task = asyncio.create_task(self._restart_loop())
+        start_recovery = self._restart_task is None or self._restart_task.done()
+        if start_recovery or self._recovery_operation is None:
+            self._recovery_operation = uuid4()
+        exited = self.process.config
+        self.journal.record(
+            "watchdog.exited", self._recovery_operation, variant=exited.variant if exited else None
+        )
+        if start_recovery:
+            self._restart_task = asyncio.create_task(self._restart_loop(self._recovery_operation))
 
-    async def _restart_loop(self) -> None:
+    async def _restart_loop(self, operation_id: UUID) -> None:
         while not self._shutting_down:
             if self._consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                 delay: float = FAILED_RETRY_DELAY
@@ -449,18 +607,21 @@ class Supervisor:
             await asyncio.sleep(delay)
             if self._shutting_down:
                 return
-            cfg = self._desired or self._last_good
-            if cfg is None:
-                return
             async with self._lock:
-                if self.process.is_running:
+                # Неудачная загрузка меняет desired, но не модель работающего процесса.
+                cfg = self._last_good or self._desired
+                if self.process.is_running or cfg is None:
                     return
+                attempt = self._consecutive_failures + 1
                 self._deploying = cfg.variant
                 self._set_status(
                     "starting",
                     f"Поднимаю движок заново ({cfg.variant})",
                     "watchdog.restarting",
                     {"variant": cfg.variant},
+                )
+                self.journal.record(
+                    "watchdog.restarting", operation_id, variant=cfg.variant, attempt=attempt
                 )
                 if await self._start_and_wait(cfg, STARTUP_TIMEOUT):
                     self._consecutive_failures = 0
@@ -471,6 +632,9 @@ class Supervisor:
                         "watchdog.ready",
                         {"variant": cfg.variant},
                     )
+                    self.journal.record(
+                        "watchdog.ready", operation_id, variant=cfg.variant, attempt=attempt
+                    )
                     return
                 self._consecutive_failures += 1
                 self._backoff_index += 1
@@ -479,4 +643,7 @@ class Supervisor:
                     f"Движок не поднялся (попытка {self._consecutive_failures}), пробую снова",
                     "watchdog.failed",
                     {"attempt": self._consecutive_failures},
+                )
+                self.journal.record(
+                    "watchdog.failed", operation_id, variant=cfg.variant, attempt=attempt
                 )

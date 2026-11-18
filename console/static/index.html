@@ -1,212 +1,291 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<!-- Подписи проставляет i18n.js по ключам data-i18n: здесь только английский,
-     чтобы страница читалась и до того, как отработает скрипт. -->
-<title>STT Console · GigaAM v3</title>
-<link rel="stylesheet" href="/static/style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='14'>🎙️</text></svg>">
-</head>
-<body>
-<div class="shell">
-
-  <header class="masthead">
-    <div class="masthead-id">
-      <span class="mono eyebrow" data-i18n="brand.eyebrow">local speech recognition</span>
-      <h1>GigaAM v3 <span class="dim" data-i18n="brand.suffix">/ STT Console</span></h1>
-    </div>
-    <div class="masthead-state">
-      <span id="state-pill" class="pill" data-state="stopped"><i></i><span id="state-label" data-i18n="state.loading">loading…</span></span>
-      <span id="key-badge" class="mono badge hidden" data-i18n="key.badge">key required</span>
-      <div id="lang" class="lang mono" role="group" data-i18n-aria="lang.label" aria-label="Interface language">
-        <button type="button" class="lang-option" data-lang="en" aria-pressed="true">EN</button>
-        <button type="button" class="lang-option" data-lang="ru" aria-pressed="false">RU</button>
-      </div>
-    </div>
-  </header>
-
-  <section class="module" id="section-status">
-    <div class="module-head">
-      <span class="mono eyebrow" data-i18n="section.status">Status</span>
-      <button id="btn-stop" class="btn btn-quiet hidden" type="button" data-i18n="btn.stop">Stop</button>
-    </div>
-    <p id="state-detail" class="detail">—</p>
-    <dl class="readout">
-      <div><dt class="mono" data-i18n="ro.variant">model</dt><dd id="ro-variant" class="mono num">—</dd></div>
-      <div><dt class="mono" data-i18n="ro.elapsed">latency, average</dt><dd id="ro-elapsed" class="mono num">—</dd></div>
-      <div><dt class="mono" data-i18n="ro.rtf">faster than speech</dt><dd id="ro-rtf" class="mono num">—</dd></div>
-      <div><dt class="mono" data-i18n="ro.total">files, all time</dt><dd id="ro-total" class="mono num">—</dd></div>
-      <div><dt class="mono" data-i18n="ro.restarts">engine restarts</dt><dd id="ro-restarts" class="mono num">—</dd></div>
-      <div><dt class="mono" data-i18n="ro.uptime">console uptime</dt><dd id="ro-uptime" class="mono num">—</dd></div>
-    </dl>
-    <div id="recent" class="recent hidden">
-      <p class="mono eyebrow" data-i18n="recent.title">recent files</p>
-      <table class="recent-table">
-        <thead><tr>
-          <th data-i18n="recent.file">file</th>
-          <th data-i18n="recent.audio">recording</th>
-          <th data-i18n="recent.work">recognition</th>
-          <th data-i18n="recent.faster">faster than speech</th>
-        </tr></thead>
-        <tbody id="recent-rows"></tbody>
-      </table>
-      <p id="recent-note" class="mono dim"></p>
-    </div>
-  </section>
-
-  <section class="module" id="section-models">
-    <div class="module-head"><span class="mono eyebrow" data-i18n="section.models">Models</span></div>
-    <p class="detail" id="models-intro"></p>
-    <div id="heads" class="heads"></div>
-
-    <details class="options">
-      <summary class="mono" data-i18n="options.summary">Startup settings</summary>
-      <div class="options-grid">
-        <label><span data-i18n="opt.punctuation">Punctuation and casing</span>
-          <select id="opt-punctuation">
-            <option value="auto" data-i18n="mode.auto">let the model decide</option>
-            <option value="on" data-i18n="mode.on">on</option>
-            <option value="off" data-i18n="mode.off">off</option>
-          </select>
-        </label>
-        <label><span data-i18n="opt.itn">Numbers as digits</span>
-          <select id="opt-itn">
-            <option value="auto" data-i18n="mode.auto">let the model decide</option>
-            <option value="on" data-i18n="mode.on">on</option>
-            <option value="off" data-i18n="mode.off">off</option>
-          </select>
-        </label>
-        <label><span data-i18n="opt.vad">Silence skipping (VAD)</span>
-          <select id="opt-vad">
-            <option value="false" data-i18n="vad.off">off</option>
-            <option value="true" data-i18n="vad.on">on</option>
-          </select>
-        </label>
-        <label><span data-i18n="opt.pool">Concurrent recognitions</span>
-          <span class="opt-note" data-i18n="opt.pool.note"></span>
-          <select id="opt-pool">
-            <option value="1" data-i18n="pool.1">1 - lowest latency</option>
-            <option value="2">2</option>
-            <option value="3">3</option>
-            <option value="4">4</option>
-          </select>
-        </label>
-        <label><span data-i18n="opt.window">File windows at once</span>
-          <select id="opt-window-concurrency">
-            <option value="1" data-i18n="window.1">1 - one after another</option>
-            <option value="2" data-i18n="window.2">2 - two windows in parallel, needs pool 2</option>
-          </select>
-          <span class="opt-note" id="opt-window-note"></span>
-        </label>
-        <label><span data-i18n="opt.hotwordsDefault">Built-in brand dictionary</span>
-          <select id="opt-hotwords-default">
-            <option value="true" data-i18n="dict.on">on - the engine's 30 consumer brands</option>
-            <option value="false" data-i18n="dict.off">off</option>
-          </select>
-        </label>
-        <label><span data-i18n="opt.boost">Glossary hint strength</span>
-          <input id="opt-boost" type="number" min="0" max="50" step="0.5" inputmode="decimal">
-        </label>
-      </div>
-      <div id="env-diff" class="env-diff hidden">
-        <p class="mono eyebrow" data-i18n="env.title">.env asks for something else</p>
-        <ul id="env-diff-list" class="env-diff-list"></ul>
-        <button id="btn-deploy-env" class="btn btn-quiet" type="button" data-i18n="env.deploy">Deploy with .env settings</button>
-      </div>
-    </details>
-  </section>
-
-  <section class="module" id="section-test">
-    <div class="module-head"><span class="mono eyebrow" data-i18n="section.test">Check</span></div>
-    <p class="detail" data-i18n="test.intro"></p>
-
-    <div class="test-row">
-      <button id="btn-record" class="btn btn-primary" type="button" data-i18n="btn.record">Record from microphone</button>
-      <label class="btn btn-quiet" for="file-input" data-i18n="btn.file">Choose a file</label>
-      <input id="file-input" type="file" accept="audio/*" hidden>
-      <canvas id="meter" class="hidden" width="480" height="40" aria-hidden="true"></canvas>
-    </div>
-
-    <div id="drop" class="drop" data-i18n="drop.hint">…or drop an audio file here</div>
-
-    <div id="result" class="result hidden">
-      <p id="result-text" class="result-text"></p>
-      <div class="latency">
-        <div class="latency-bars">
-          <div class="latency-bar audio"><span id="bar-audio"></span><b class="mono"><span data-i18n="latency.audio">recording</span> <em id="val-audio">—</em></b></div>
-          <div class="latency-bar work"><span id="bar-work"></span><b class="mono"><span data-i18n="latency.work">recognition</span> <em id="val-work">—</em></b></div>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#292a2b">
+    <title>Dictation — Kamerton</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='7' fill='%23292a2b'/%3E%3Cpath d='M13 9v10a7 7 0 0 0 14 0V9M20 26v7' fill='none' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body>
+    <a class="skip" href="#main" data-i18n="nav.skip">Skip to workspace</a>
+    <svg class="defs" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs>
+    <symbol id="i-fork" viewBox="0 0 42 42"><rect width="42" height="42" rx="8" fill="#e3e4e0"/><g fill="none" stroke="#292a2b" stroke-linecap="round" stroke-width="3.3"><path d="M11 10v9c0 8 13 8 13 0v-9M17.5 25v8m1-23v8M29 10v13"/></g></symbol>
+    <symbol id="i-dict" viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="13" rx="4"/><path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4m-4 0h8"/></symbol><symbol id="i-file" viewBox="0 0 24 24"><path d="M5 3h9l5 5v13H5zM14 3v6h5M8 15h2l1-2 2 4 1-2h2"/></symbol><symbol id="i-compare" viewBox="0 0 24 24"><path d="M3 6h12m-3-3 3 3-3 3M21 18H9m3-3-3 3 3 3M4 12h4m8 0h4"/></symbol><symbol id="i-models" viewBox="0 0 24 24"><path d="m3 8 9-5 9 5-9 5zM3 12l9 5 9-5m-18 4 9 5 9-5"/></symbol><symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 6h6m4 0h6M4 12h10m4 0h2M4 18h2m4 0h10"/><circle cx="12" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="8" cy="18" r="2"/></symbol><symbol id="i-gloss" viewBox="0 0 24 24"><path d="M3 4q5-2 9 1 4-3 9-1v15q-5-2-9 1-4-3-9-1zM12 5v15"/></symbol><symbol id="i-status" viewBox="0 0 24 24"><path d="M2 12h5l3-7 4 14 3-7h5"/></symbol><symbol id="i-log" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8m-8 4h8m-8 4h5"/></symbol><symbol id="i-api" viewBox="0 0 24 24"><path d="m7 7-5 5 5 5m10-10 5 5-5 5m-3-14-4 18"/></symbol><symbol id="i-text" viewBox="0 0 24 24"><path d="M4 5h16M4 10h16M4 15h10m-10 5h13"/></symbol><symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/></symbol><symbol id="i-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol><symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h15m-6-6 6 6-6 6"/></symbol><symbol id="i-ext" viewBox="0 0 24 24"><path d="M14 3h7v7m0-7L10 14m0-9H4v15h15v-6"/></symbol><symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h6l2 2h10v12H3z"/></symbol>
+    </defs></svg>
+    <div class="shell">
+      <aside class="rail">
+        <div class="brand"><svg class="logo" aria-hidden="true"><use href="#i-fork"/></svg>
+          <div><span data-i18n="brand.name">Kamerton</span><small data-i18n="brand.sub">Speech console</small>
+          </div>
         </div>
-        <p id="latency-verdict" class="mono verdict"></p>
+        <nav id="railnav" data-i18n-aria="nav.label" aria-label="Console sections">
+          <div class="navgroup">
+            <a href="#dict"><svg class="ico" aria-hidden="true"><use href="#i-dict"/></svg><span data-i18n="page.dict">Dictation</span></a>
+            <a href="#compare"><svg class="ico" aria-hidden="true"><use href="#i-compare"/></svg><span data-i18n="page.compare">Compare</span></a>
+            <a href="#api"><svg class="ico" aria-hidden="true"><use href="#i-api"/></svg><span data-i18n="page.api">API connection</span></a>
+          </div>
+          <div class="navgroup">
+            <a href="#models"><svg class="ico" aria-hidden="true"><use href="#i-models"/></svg><span data-i18n="page.models">Models</span></a>
+            <a href="#settings"><svg class="ico" aria-hidden="true"><use href="#i-settings"/></svg><span data-i18n="page.settings">Startup settings</span></a>
+            <a href="#glossary"><svg class="ico" aria-hidden="true"><use href="#i-gloss"/></svg><span data-i18n="page.glossary">Glossary</span></a>
+            <a href="#status"><svg class="ico" aria-hidden="true"><use href="#i-status"/></svg><span data-i18n="page.status">Service status</span></a>
+            <a href="#journal"><svg class="ico" aria-hidden="true"><use href="#i-log"/></svg><span data-i18n="page.journal">Journal</span></a>
+          </div>
+        </nav>
+        <div class="railfoot"><a id="state-pill" href="#status"><i class="lamp"></i><span id="state-label">…</span></a>
+          <div class="lang" role="group" data-i18n-aria="lang.label"><button type="button" class="lang-option" data-lang="en" lang="en">EN</button><button type="button" class="lang-option" data-lang="ru" lang="ru">RU</button>
+          </div>
+        </div>
+      </aside>
+      <div class="frame">
+        <header class="mobile">
+          <div class="brand"><svg class="logo" aria-hidden="true"><use href="#i-fork"/></svg>
+            <div><span data-i18n="brand.name">Kamerton</span><small data-i18n="brand.sub">Speech console</small>
+            </div>
+          </div>
+          <div class="lang" role="group" data-i18n-aria="lang.label"><button type="button" class="lang-option" data-lang="en" lang="en">EN</button><button type="button" class="lang-option" data-lang="ru" lang="ru">RU</button>
+          </div><select id="mobile-nav" data-i18n-aria="nav.label"></select>
+        </header>
+        <main id="main" tabindex="-1">
+          <header class="pagehead">
+            <h1 id="heading">Dictation</h1>
+            <p id="intro">Record a phrase or transcribe an audio file.</p>
+          </header>
+          <section data-page="dict" class="dictwork" aria-labelledby="heading">
+            <div class="dictdesk">
+              <div id="drop" class="rack">
+                <div class="face">
+                  <div class="faceinfo" role="status">
+                    <h2><i class="led"></i><span id="source-title">Microphone</span></h2>
+                    <p id="source-state"></p>
+                  </div>
+                  <div class="scope" aria-hidden="true"><i class="idlepoint" id="idlepoint"></i><canvas id="meter" width="480" height="64" hidden></canvas>
+                  </div>
+                </div>
+                <div class="rackcontrols">
+                  <div class="modes" role="group" data-i18n-aria="audio.source"><button type="button" id="mic-mode" aria-pressed="true"><svg class="ico" aria-hidden="true"><use href="#i-dict"/></svg><span data-i18n="audio.mic">Microphone</span></button><button type="button" id="file-mode" aria-pressed="false"><svg class="ico" aria-hidden="true"><use href="#i-file"/></svg><span data-i18n="audio.file">Audio file</span></button>
+                  </div>
+                  <button type="button" id="btn-record" class="primary" disabled>Record</button>
+                  <div class="sourcebtns" id="file-actions" hidden><label class="filepick"><span data-i18n="btn.file">Choose a file</span><input type="file" id="file-input" accept="audio/*,.wav,.webm,.opus,.mp3,.ogg,.flac,.m4a" data-i18n-aria="btn.file"></label><button type="button" id="btn-send" class="primary" data-i18n="audio.send" disabled>Transcribe</button>
+                  </div>
+                </div>
+              </div>
+              <section class="result">
+                <div class="titleline">
+                  <h2 data-i18n="audio.transcript">Transcript</h2><button class="copy soft" data-target="result-text" type="button" data-i18n="btn.copy" hidden>Copy</button>
+                </div>
+                <p class="transcript empty" id="result-text" role="status" data-i18n="audio.empty">Your transcript will appear here.</p>
+                <div class="latency" id="result" hidden>
+                  <div><span data-i18n="latency.audio">recording</span><strong id="val-audio">—</strong><i><b id="bar-audio"></b></i>
+                  </div>
+                  <div><span data-i18n="latency.work">recognition</span><strong id="val-work">—</strong><i><b id="bar-work"></b></i>
+                  </div>
+                  <p id="latency-verdict"></p>
+                </div>
+              </section>
+            </div>
+            <aside class="dictaside">
+              <section class="configbox">
+                <h2 data-i18n="audio.config">Current settings</h2>
+                <div class="identity"><strong id="cur-model">—</strong><code class="pill" id="cur-id"></code>
+                </div>
+                <dl><dt data-i18n="opt.punctuation">Punctuation and casing</dt><dd id="cur-punct">—</dd><dt data-i18n="opt.itn">Numbers as digits</dt><dd id="cur-itn">—</dd>
+                </dl><a class="textlink" href="#settings" data-i18n="page.settings">Startup settings</a>
+              </section>
+              <section class="metricsline">
+                <h2 data-i18n="audio.median">Median latency</h2>
+                <p id="cur-median">—</p><a class="textlink" href="#status" data-i18n="audio.metrics">View measurements</a>
+              </section>
+            </aside>
+          </section>
+          <section data-page="compare" class="sections" hidden aria-labelledby="heading">
+            <p role="status" id="compare-availability"></p>
+            <form id="compare-form" hidden>
+              <div class="selectrow"><label class="field"><span data-i18n="compare.first">First model</span><select id="model-a" required></select></label><label class="field"><span data-i18n="compare.second">Second model</span><select id="model-b" required></select></label>
+              </div>
+              <div class="actions compare-controls"><button type="submit" id="btn-compare" class="primary" data-i18n="compare.run" hidden disabled>Compare models</button><label class="filepick primary" id="compare-picker"><span id="compare-pick-label">Choose a file</span><input id="compare-file" type="file" accept="audio/*,.wav,.webm,.opus,.mp3,.ogg,.flac,.m4a" required data-i18n-aria="btn.file" aria-labelledby="compare-pick-label"></label><span class="filename" id="compare-name"></span>
+              </div>
+            </form><a class="textlink" id="compare-models" href="#models" data-i18n="page.models">Models</a>
+            <p role="status" id="compare-stage"></p>
+            <div id="compare-results" class="panelgrid">
+            </div>
+            <p id="compare-time-note" class="help" data-i18n="compare.timing" hidden></p>
+          </section>
+          <section data-page="models" class="sections" hidden aria-labelledby="heading">
+            <div class="modelwork">
+              <div>
+                <fieldset>
+                  <legend data-i18n="models.next">Model for the next deployment</legend>
+                  <div class="modelrows" id="heads">
+                  </div>
+                </fieldset><a class="button primary" href="#settings" data-i18n="models.configure">Configure selected model</a>
+              </div>
+              <section class="modeldetail stack">
+                <h2 id="head-name">—</h2>
+                <p class="identity" id="head-meta"></p>
+                <p id="head-description"></p>
+                <p class="head-badge" id="head-badge"></p>
+                <p class="help" id="head-note"></p>
+              </section>
+            </div>
+            <p id="models-intro" class="modelnote"></p>
+          </section>
+          <section data-page="settings" hidden aria-labelledby="heading">
+            <form id="config-form">
+              <div class="cfghead">
+                <div><span class="small" data-i18n="models.selected">Selected model</span> <strong id="cfg-model">—</strong>
+                </div><a class="textlink" href="#models" data-i18n="models.change">Change model</a>
+              </div>
+              <fieldset id="config-editor" class="cfgfields" disabled>
+                <fieldset>
+                  <legend data-i18n="settings.text">Text formatting</legend>
+                  <div class="stack"><label class="field"><span data-i18n="opt.punctuation">Punctuation and casing</span><select id="opt-punctuation"></select></label><label class="field"><span data-i18n="opt.itn">Numbers as digits</span><select id="opt-itn"></select></label>
+                  </div>
+                </fieldset>
+                <fieldset>
+                  <legend data-i18n="settings.audio">Audio processing</legend>
+                  <div class="stack"><label class="field"><span data-i18n="opt.vad">Silence skipping</span><select id="opt-vad"></select></label><label class="field"><span data-i18n="opt.pool">Concurrent recognitions</span><select id="opt-pool" aria-describedby="pool-note"></select></label>
+                    <p class="help" id="pool-note" data-i18n="opt.pool.note"></p><label class="field"><span data-i18n="opt.window">File windows at once</span><select id="opt-window-concurrency" aria-describedby="opt-window-note"></select></label>
+                    <p class="help" id="opt-window-note"></p>
+                  </div>
+                </fieldset>
+                <fieldset>
+                  <legend data-i18n="settings.hints">Vocabulary hints</legend>
+                  <div class="stack"><label class="field"><span data-i18n="opt.hotwordsDefault">Built-in brand dictionary</span><select id="opt-hotwords-default"></select></label><label class="field"><span data-i18n="opt.boost">Glossary hint strength</span><input type="number" id="opt-boost" min="0" max="50" step="any" inputmode="decimal" required></label>
+                  </div>
+                </fieldset>
+              </fieldset>
+              <div class="actions"><button id="btn-deploy" type="submit" class="primary" disabled data-i18n="head.deploy">Deploy</button><span id="draft-note" class="help"></span>
+              </div>
+              <p id="deploy-feedback" role="status"></p><progress id="deploy-progress" max="100" hidden data-i18n-aria="head.deploy"></progress>
+            </form>
+            <div id="env-diff" class="env-diff hidden">
+              <h2 data-i18n="env.title">Different .env settings</h2>
+              <ul id="env-diff-list">
+              </ul><button id="btn-deploy-env" type="button" data-i18n="env.deploy">Deploy with .env settings</button>
+            </div>
+          </section>
+          <section data-page="glossary" class="panelgrid" hidden aria-labelledby="heading">
+            <div class="panel stack">
+              <div class="titleline">
+                <h2 data-i18n="glossary.phrases">Phrases</h2><span class="pill" id="glossary-count">—</span>
+              </div>
+              <fieldset id="glossary-editor" disabled>
+                <div id="tags"><span id="tag-list"></span><span class="tag-entry"><input type="text" id="add-phrase" spellcheck="false" autocomplete="off" data-i18n-placeholder="glossary.placeholder" data-i18n-aria="glossary.addAria"><button type="button" id="btn-add" data-i18n="glossary.add">Add</button></span>
+                </div>
+                <p id="glossary-reach"></p>
+                <p id="dropped-hint" class="help"></p>
+                <div id="glossary-issues">
+                </div>
+                <p id="glossary-env" class="hidden"><span id="glossary-env-text"></span> <button type="button" id="btn-glossary-env" data-i18n="glossary.envAdd">Add from .env</button></p>
+                <div class="actions"><button class="primary" type="button" id="btn-glossary" disabled data-i18n="btn.apply">Apply</button><label class="filepick"><span data-i18n="btn.import">Import</span><input type="file" id="glossary-file" accept=".txt,.csv,text/plain,text/csv" data-i18n-aria="btn.import"></label><button type="button" id="btn-export" data-i18n="btn.export">Export</button>
+                </div>
+              </fieldset>
+              <p role="status" id="glossary-hint"></p><button type="button" id="glossary-retry" data-i18n="head.retry" hidden>Try again</button>
+            </div>
+            <div class="panel stack">
+              <h2 data-i18n="glossary.guide">When to add a phrase</h2>
+              <p class="help" id="glossary-intro"></p>
+            </div>
+          </section>
+          <section data-page="api" hidden class="apiwork panelgrid" aria-labelledby="heading">
+            <div class="stack">
+              <div class="panel stack">
+                <h2 data-i18n="api.address">Server address</h2><label class="field"><span data-i18n="api.examples">Address for examples</span><input type="url" id="example-origin" autocomplete="off" spellcheck="false" aria-describedby="address-help address-error"></label>
+                <p id="address-help" class="help" data-i18n="api.addressHelp"></p>
+                <p role="status" id="address-error" class="error"></p><button type="button" class="soft" id="reset-origin" data-i18n="api.reset">Use this service</button>
+              </div>
+              <div class="panel stack">
+                <h2>OpenAI Base URL</h2>
+                <div class="actions"><code id="base-url"></code><button type="button" class="copy" data-target="base-url" data-i18n="btn.copy">Copy</button>
+                </div>
+                <p class="help" id="connect-intro"></p>
+                <div id="connect-docs"><a id="link-docs" href="/api/docs" target="_blank" rel="noreferrer" data-i18n="connect.swagger">Swagger at /api/docs</a>
+                </div>
+                <details class="snippet" id="service-models"><summary data-i18n="api.currentModels">Models on this service</summary><pre id="model-response" role="status"></pre></details>
+              </div>
+            </div>
+            <div class="panel stack">
+              <h2 data-i18n="api.requests">Request examples</h2><label class="check"><input type="checkbox" id="example-key"><span data-i18n="api.bearer">Include a Bearer token variable</span></label>
+              <div class="snippet">
+                <div class="titleline"><strong>curl</strong><button class="copy" data-target="snip-curl" type="button" data-i18n="btn.copy">Copy</button>
+                </div><pre id="snip-curl"></pre>
+              </div>
+              <div class="snippet">
+                <div class="titleline"><strong data-i18n="snippet.python">Python, openai SDK</strong><button class="copy" data-target="snip-py" type="button" data-i18n="btn.copy">Copy</button>
+                </div><pre id="snip-py"></pre>
+              </div>
+              <div class="snippet">
+                <div class="titleline"><strong data-i18n="snippet.models">Model list</strong><button class="copy" data-target="snip-models" type="button" data-i18n="btn.copy">Copy</button>
+                </div><pre id="snip-models"></pre>
+              </div>
+            </div>
+          </section>
+          <section data-page="status" class="sections" hidden aria-labelledby="heading">
+            <div class="panel stack">
+              <div class="titleline">
+                <h2 id="state-detail">—</h2><button type="button" id="btn-stop" class="hidden" data-i18n="btn.stop">Stop</button>
+              </div>
+              <div class="actions"><span id="key-badge" class="hidden" data-i18n="key.badge">Key required</span><button type="button" id="edit-key" data-i18n="key.edit">Set API key</button>
+              </div>
+              <dl class="readout">
+                <div><dt data-i18n="status.readiness">Engine status</dt><dd id="ro-state">—</dd>
+                </div>
+                <div><dt data-i18n="status.target">Deployment target</dt><dd id="ro-target">—</dd>
+                </div>
+                <div><dt data-i18n="ro.variant">model</dt><dd id="ro-variant">—</dd>
+                </div>
+                <div><dt data-i18n="ro.elapsed">latency, average</dt><dd id="ro-elapsed">—</dd>
+                </div>
+                <div><dt data-i18n="ro.rtf">faster than speech</dt><dd id="ro-rtf">—</dd>
+                </div>
+                <div><dt data-i18n="ro.total">files, all time</dt><dd id="ro-total">—</dd>
+                </div>
+                <div><dt data-i18n="ro.restarts">engine restarts</dt><dd id="ro-restarts">—</dd>
+                </div>
+                <div><dt data-i18n="ro.uptime">console uptime</dt><dd id="ro-uptime">—</dd>
+                </div>
+              </dl><a class="textlink" href="#settings" data-i18n="page.settings">Startup settings</a>
+            </div>
+            <div class="panel stack">
+              <h2 data-i18n="recent.title">Recent files</h2>
+              <p id="recent-empty" data-i18n="audio.noMetrics">No measurements yet.</p>
+              <div id="recent" class="hidden">
+                <table>
+                  <thead>
+                    <tr><th data-i18n="recent.file">File</th><th data-i18n="recent.audio">Recording</th><th data-i18n="recent.work">Recognition</th><th data-i18n="recent.faster">Faster than speech</th>
+                    </tr>
+                  </thead>
+                  <tbody id="recent-rows">
+                  </tbody>
+                </table>
+                <p id="recent-note" class="help"></p>
+              </div>
+            </div>
+          </section>
+          <section data-page="journal" class="sections" hidden aria-labelledby="heading">
+            <div class="panel stack">
+              <h2 data-i18n="journal.recent">Recent events</h2>
+              <p class="help" data-i18n="journal.limit"></p>
+              <div class="filters"><label class="field"><span data-i18n="journal.category">Category</span><select id="journal-category"></select></label><label class="field"><span data-i18n="journal.level">Level</span><select id="journal-level"></select></label><label class="field"><span data-i18n="journal.period">Period</span><select id="journal-period"></select></label>
+              </div>
+              <p id="journal-note" role="status"></p>
+              <ol id="journal-events">
+              </ol>
+            </div>
+            <details class="panel" id="tech-logs">
+              <summary data-i18n="journal.logs">Technical logs</summary><label class="check"><input id="log-follow" type="checkbox" checked><span data-i18n="logs.follow">follow</span></label><pre id="logs" tabindex="0" data-i18n-aria="journal.logs"></pre>
+            </details>
+          </section>
+        </main>
+        <footer><span data-i18n="foot.engine">engine</span> <a href="https://github.com/ekhodzitsky/gigastt" target="_blank" rel="noreferrer">gigastt</a> · <span data-i18n="foot.model">model</span> <a href="https://github.com/salute-developers/GigaAM" target="_blank" rel="noreferrer">GigaAM v3</a>
+        </footer>
       </div>
     </div>
-  </section>
-
-  <section class="module" id="section-glossary">
-    <div class="module-head">
-      <span class="mono eyebrow" data-i18n="section.glossary">Glossary</span>
-      <span id="glossary-count" class="mono badge" data-i18n="glossary.none">no phrases</span>
-    </div>
-    <p class="detail" id="glossary-intro"></p>
-    <div id="tags" class="tags">
-      <span id="tag-list" class="tag-list"></span>
-      <span class="tag-entry">
-        <input id="add-phrase" class="tag-input" type="text" spellcheck="false"
-               autocomplete="off" data-i18n-placeholder="glossary.placeholder"
-               data-i18n-aria="glossary.addAria">
-        <button id="btn-add" class="tag-add" type="button"
-                data-i18n-title="glossary.add" data-i18n-aria="glossary.add">+</button>
-      </span>
-    </div>
-    <p id="glossary-reach" class="mono reach-line"></p>
-    <p id="dropped-hint" class="detail"></p>
-    <div id="glossary-issues" class="glossary-issues"></div>
-    <p id="glossary-env" class="detail hidden">
-      <span id="glossary-env-text"></span>
-      <button id="btn-glossary-env" class="btn btn-quiet" type="button" data-i18n="glossary.envAdd">Add from .env</button>
-    </p>
-
-    <div class="test-row">
-      <button id="btn-glossary" class="btn btn-primary" type="button" data-i18n="btn.apply">Apply</button>
-      <label class="btn btn-quiet" for="glossary-file" data-i18n="btn.import">Import</label>
-      <input id="glossary-file" type="file" accept=".txt,.csv,text/plain,text/csv" hidden>
-      <button id="btn-export" class="btn btn-quiet" type="button" data-i18n="btn.export">Export</button>
-      <span id="glossary-hint" class="mono dim"></span>
-    </div>
-  </section>
-
-  <section class="module" id="section-connect">
-    <div class="module-head"><span class="mono eyebrow" data-i18n="section.connect">Connecting</span></div>
-    <p class="detail" id="connect-intro"></p>
-    <p class="detail" id="connect-docs"><a id="link-docs" href="/api/docs" target="_blank" rel="noreferrer" data-i18n="connect.swagger">Swagger at /api/docs</a></p>
-    <div class="snippet">
-      <div class="snippet-head"><span class="mono">curl</span><button class="btn btn-quiet copy" data-target="snip-curl" type="button" data-i18n="btn.copy">Copy</button></div>
-      <pre id="snip-curl"></pre>
-    </div>
-    <div class="snippet">
-      <div class="snippet-head"><span class="mono" data-i18n="snippet.python">Python, openai SDK</span><button class="btn btn-quiet copy" data-target="snip-py" type="button" data-i18n="btn.copy">Copy</button></div>
-      <pre id="snip-py"></pre>
-    </div>
-    <div class="snippet">
-      <div class="snippet-head"><span class="mono" data-i18n="snippet.models">model list</span><button class="btn btn-quiet copy" data-target="snip-models" type="button" data-i18n="btn.copy">Copy</button></div>
-      <pre id="snip-models"></pre>
-    </div>
-  </section>
-
-  <section class="module" id="section-logs">
-    <div class="module-head">
-      <span class="mono eyebrow" data-i18n="section.logs">Logs</span>
-      <label class="mono toggle"><input id="log-follow" type="checkbox" checked> <span data-i18n="logs.follow">follow</span></label>
-    </div>
-    <pre id="logs" class="logs"></pre>
-  </section>
-
-  <footer class="foot mono">
-    <span><span data-i18n="foot.engine">engine</span> <a href="https://github.com/ekhodzitsky/gigastt" target="_blank" rel="noreferrer">gigastt</a> · <span data-i18n="foot.model">model</span> <a href="https://github.com/salute-developers/GigaAM" target="_blank" rel="noreferrer">GigaAM v3</a></span>
-  </footer>
-</div>
-<script src="/static/i18n.js"></script>
-<script src="/static/app.js"></script>
-</body>
+    <div id="live" role="status" class="toast"></div>
+    <script src="/static/i18n.js"></script>
+    <script src="/static/app.js"></script>
+  </body>
 </html>

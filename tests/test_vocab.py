@@ -91,8 +91,8 @@ def test_the_engine_tries_three_spellings_in_this_order():
 
 def test_yo_is_folded_because_the_head_writes_e_in_its_place(tmp_path):
     alphabet = read_alphabet(cyrillic_vocab(tmp_path / "v3_vocab.txt"))
-    usable, dropped = split_representable(["аймоп", "пётр иванович сидоров"], alphabet)
-    assert usable == ["аймоп", "пётр иванович сидоров"]
+    usable, dropped = split_representable(["аймоп", "тёплый осенний вечер"], alphabet)
+    assert usable == ["аймоп", "тёплый осенний вечер"]
     assert dropped == []
 
 

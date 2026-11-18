@@ -1,14 +1,14 @@
 # STT Console: local Russian speech recognition
 
-Your own speech recognition server with an OpenAI-compatible API and a web console:
-pick a GigaAM v3 head, press "Deploy", and the API is live. Built for Russian
-dictation on your own machine - no cloud, no GPU.
+Your own speech recognition server with an OpenAI-compatible API and the Kamerton
+web console. Choose a model, review its startup settings, and deploy it. Built for
+Russian dictation on your own machine - no cloud, no GPU.
 
 *Read this in [Russian](README.ru.md). The documents under [`docs/`](docs/) are in
 Russian only.*
 
-*The console is bilingual: English by default, Russian behind the EN/RU switch in
-the header. The choice is remembered in the browser.*
+*The console is bilingual: English by default. Use the EN/RU switch to change
+languages. The browser remembers the choice.*
 
 [![License Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue)](pyproject.toml)
@@ -21,12 +21,13 @@ is about 340 MB. The engine version is pinned in `GIGASTT_TAG`, and the number i
 lives in [`docker-compose.yml`](docker-compose.yml) - it is not repeated here so the
 two cannot drift apart.
 
-![Web console](docs/console.png)
+![Kamerton: dictation and its transcript](docs/console.png)
 
 ## Contents
 
 - [Quick start](#quick-start)
-- [Which head to pick](#which-head-to-pick)
+- [Using the web console](#using-the-web-console)
+- [Which model to pick](#which-model-to-pick)
 - [Measured speed](#measured-speed)
 - [Connecting a client](#connecting-a-client)
 - [Glossary and the built-in brand dictionary](#glossary-and-the-built-in-brand-dictionary)
@@ -46,14 +47,37 @@ cp .env.example .env          # optional: without .env the defaults apply
 docker compose up -d
 ```
 
-Open `http://<server-address>:8091`, press "Deploy" on the
-**GigaAM v3 RNN-T end-to-end** card and wait for the "ready" status. The
-first run downloads ~230 MB of weights; afterwards they stay in `models/` and are not
-downloaded again.
+Open `http://localhost:8091` on the Docker host. By default the port is bound to
+loopback. For remote access, use an SSH tunnel or set `HOST_BIND` to the intended
+network interface in `.env`, set a strong `API_KEY`, and use HTTPS for clients.
 
-## Which head to pick
+Under **Models**, select **GigaAM v3 RNN-T
+end-to-end**, open its settings, and deploy it. Wait until the service is ready.
+The first run downloads about 230 MB of weights and keeps them in `models/`.
 
-| Head | Languages | Punctuation | Our WER, FLEURS ru | 165 s of audio | Badge |
+## Using the web console
+
+- **Dictation** accepts an audio file or records from a microphone. To use the
+  microphone, open the console on `localhost` or over HTTPS.
+- **Models** is where you choose the next model. **Startup settings** is where
+  you apply that choice and the processing settings together.
+- **API connection** shows the Base URL for the address you opened, a copyable
+  example and a link to Swagger UI. You can change the address in the examples.
+- **Journal** shows recent deployment and engine events. It holds up to 200
+  entries in memory and starts fresh when the console process restarts.
+- **Compare** runs two already downloaded models on one file, one after the
+  other, without switching the model that serves the API. To enable it, set
+  `ENABLE_MODEL_COMPARE=1` and a non-empty `API_KEY` in `.env`, then recreate
+  the container. Each run uses a separate process and shares CPU and memory with
+  the live model. Deployment or recovery takes priority and can stop a comparison.
+  Its duration includes loading the model, not the HTTP upload. Comparison runs omit VAD, the glossary and separate punctuation
+  and number-normalization passes; formatting built into the model remains.
+
+[Screenshot: two models transcribing the same recording](docs/console-compare.png)
+
+## Which model to pick
+
+| Model | Languages | Punctuation | Our WER, FLEURS ru | 165 s of audio | Badge |
 |---|---|---|--:|--:|---|
 | `e2e_rnnt` | ru | built into the model | **4.32%** | 6.6 s | best for Russian |
 | `ml_ctc_large` | ru, en, kk, ky, uz | separate pass, manual | 6.25% | 11.2 s | best multilingual |
@@ -92,20 +116,19 @@ Measured on a 16-core desktop CPU, head `e2e_rnnt`, `POOL_SIZE=1`, best of three
 | 5.5 min | 12.97 s | x25 |
 | 10.3 min | 24.53 s | x25 |
 
-On our eight-core production machine the same work costs twice as much: RTF around
-0.05, so six minutes of dictation honestly cost about 19 seconds of waiting.
+On an eight-core CPU we measured an RTF of about 0.05: six minutes of dictation
+took about 19 seconds to transcribe.
 
-**Time grows linearly, and that is the design, not a defect.** Anything longer than 30
-seconds is cut by the engine into 24-second windows with a 2-second overlap and
-processed strictly one after another. The only way to speed that up would be
-processing windows in parallel, which the engine does not do. We tested silence
+The engine splits long recordings into overlapping windows. It processes them
+sequentially by default. `FILE_WINDOW_CONCURRENCY=2` can use a free slot when
+`POOL_SIZE` is at least 2; the effect depends on the model
+([measurements, in Russian](docs/research/long-form-seams.md)). We tested silence
 skipping (`VAD=1`): on 3-10 minute recordings it saves 20-30% of the time but changes
 3% of the words, and on short dictation it is actually slower - so it stays off
 ([measurement, in Russian](docs/research/head-choice-and-wer.md)).
 
 The console's own overhead is 5 to 25 milliseconds, i.e. 0.1% on a ten-minute file.
-Your server is probably slower than ours, so the console **measures latency itself** on
-every request and shows it in the "Status" section.
+The console **measures latency on your server** and shows it under **Service status**.
 
 **Your client adds its own time on top of ours.** OpenWhispr does not stream to a
 custom `base_url` and by default pushes the finished text through an LLM cleanup pass
@@ -137,18 +160,17 @@ anything - the head you deployed is the one that runs.
 Not supported: `/v1/audio/translations` (GigaAM does not translate speech) and the
 `prompt` field - context is set through the glossary.
 
-Two caveats, both confirmed by measurement. If you produce WebM yourself, tell `ffmpeg`
-the sample rate explicitly (`-ar 48000` before `-c:a libopus`): the engine reads it from
-the container, and a file whose header says anything other than 48 kHz returns code 200
-and empty text. And `stream=true` on an uploaded file yields almost no intermediate
-text - the engine received all the audio at once; live text needs live audio, and for
-that the engine's native `/v1/ws` is proxied through
-([write-up, in Russian](docs/open-questions.md)).
+Since gigastt 2.22.0, WebM/Opus is resampled from the decoder's actual 48 kHz
+output rather than the container header. The [smoke test](docs/manual-smoke.md#результат-проверки-gigastt-2220)
+checks both 16 and 48 kHz headers. With `stream=true` on a file upload, use
+`transcript.text.done` for the final transcript and `[DONE]` to confirm completion;
+intermediate deltas are not the final text.
 
 ### What is exposed
 
-The key is all-or-nothing: an empty `API_KEY` leaves the service fully open, a
-non-empty one closes everything except `/health`.
+A non-empty `API_KEY` protects the API routes, except for `/health`. The web
+console itself is still served so you can enter the key. Comparison also requires
+an explicit opt-in.
 
 | Path | Behind the key | What it does |
 |---|---|---|
@@ -159,14 +181,15 @@ non-empty one closes everything except `/health`.
 | `GET /api/status`, `/api/models`, `/api/glossary` | yes | Data for the web console |
 | `POST /api/deploy`, `/api/stop`, `/api/glossary` | yes | Deploy a head, stop the engine, apply the glossary |
 | `POST /api/test` | yes | One-off recognition with timing and RTF |
-| `GET /api/events` | yes | SSE: status, download progress, logs |
+| `POST /api/compare` | yes, mandatory | Compare two downloaded models on one file; off by default |
+| `GET /api/journal` | yes | Structured deployment and engine events |
+| `GET /api/events` | yes | SSE: status, download progress, technical logs |
 | `GET /api/docs`, `/api/openapi.json` | yes | Swagger UI and the schema of the control API |
-| `GET /health` | no | Liveness of the console itself: otherwise Docker's healthcheck would restart a healthy container |
+| `GET /health` | no | Console liveness; returns `engine_detail_code`, not error text. See `/api/status` for `detail` |
 
-The key is sent as `Authorization: Bearer <key>`, and where a header cannot be sent, as
-`?api_key=<key>`. There are exactly two such places, both in the browser: `EventSource`
-on `/api/events` and following a link to `/api/docs`. The usual price of a key in a URL
-applies: it stays in browser history and in proxy logs.
+Use `Authorization: Bearer <key>` in API clients. The console uses a query parameter
+for the event stream and Swagger UI. These URLs may expose the key in browser history
+or proxy logs. Do not share them; configure the proxy not to log query strings.
 
 ## Glossary and the built-in brand dictionary
 
@@ -175,7 +198,7 @@ web console, or - for a headless deployment - through `INITIAL_CONTEXT` in `.env
 is commented out in the sample and has to be uncommented):
 
 ```
-INITIAL_CONTEXT=АйМоп, GigaAM|8, Петр Иванович Сидоров
+INITIAL_CONTEXT=Камертон, GigaAM|8, распознавание речи
 ```
 
 Separators are a comma or a newline, and the overall strength of the hint is
@@ -191,7 +214,7 @@ whole field's terminology starts pulling ordinary speech towards itself. Very sh
 phrases are the worst offenders, because they win close calls they were never meant to
 enter.
 
-**The per-phrase weight after a vertical bar is a switch, not a dial.** Engine 2.21.0
+**The per-phrase weight after a vertical bar is a switch, not a dial.** The engine
 keeps one boost for the whole trie: anything above zero behaves exactly like `1`, and
 zero or less removes the phrase from biasing altogether. `GigaAM|8` and `GigaAM|0.5`
 are the same phrase; `GigaAM|0` is no phrase at all. The console says so beneath the
@@ -229,8 +252,10 @@ Console settings: read when the container starts, not selectable in the console.
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `HOST_BIND` | `127.0.0.1` | Host interface for the published port |
 | `HOST_PORT` | `8091` | Port on the host |
 | `API_KEY` | empty | If set, `Authorization: Bearer <key>` is required |
+| `ENABLE_MODEL_COMPARE` | `0` | Enable the comparison of two downloaded models; requires `API_KEY` |
 | `AUTOSTART` | `1` | Bring up the last model when the container starts |
 | `MAX_UPLOAD_MB` | `150` | File size limit; the engine is given the same value, with headroom |
 | `HF_TOKEN` | empty | Not needed: weights come from GitHub Releases |
@@ -304,8 +329,8 @@ not help, download the head's four weight files by hand from the
 grant microphone access only on `localhost` or over HTTPS: open the console through an
 SSH tunnel (`ssh -L 8091:localhost:8091 server`). File recognition always works.
 
-**Logs.** `docker compose logs -f`, which also carries the engine's output. The last
-lines are visible in the console's "Logs" section.
+**Logs.** Run `docker compose logs -f` or open **Technical logs** in the
+console's **Journal** to see engine output.
 
 **The port is taken.** Change `HOST_PORT` in `.env` and run `docker compose up -d`.
 
