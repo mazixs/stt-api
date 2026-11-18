@@ -109,6 +109,7 @@ class EngineProcess:
         self.on_exit = on_exit or (lambda code: None)
         self.config: EngineConfig | None = None
         self._process: asyncio.subprocess.Process | None = None
+        self._stop_task: asyncio.Task[None] | None = None
         self._tasks: list[asyncio.Task[Any]] = []
         self._expected_exit = False
 
@@ -121,8 +122,8 @@ class EngineProcess:
         return self._process.pid if self._process else None
 
     async def start(self, cfg: EngineConfig) -> None:
-        if self.is_running:
-            raise RuntimeError("engine already running")
+        if self.is_running or (self._stop_task is not None and not self._stop_task.done()):
+            raise RuntimeError("engine already running or stopping")
         argv = build_argv(self.settings, cfg)
         env = engine_env(self.settings)
         env["RUST_LOG"] = f"gigastt={self.settings.log_level}"
@@ -161,6 +162,12 @@ class EngineProcess:
         self.on_exit(code)
 
     async def stop(self, timeout: float = 15.0) -> None:
+        # Одна операция SIGTERM → kill → wait; отмена вызывающего не бросает процесс.
+        if self._stop_task is None or self._stop_task.done():
+            self._stop_task = asyncio.create_task(self._stop(timeout))
+        await wait_uninterrupted(self._stop_task)
+
+    async def _stop(self, timeout: float) -> None:
         process, self._process = self._process, None
         self._expected_exit = True
         if process is not None and process.returncode is None:

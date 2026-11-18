@@ -218,6 +218,37 @@ async def test_shutdown_reaps_download_and_drops_queued_deploy(console_settings,
         assert not app.state.supervisor.process.is_running
 
 
+async def test_shutdown_during_deploy_sigterm_waits_for_kill_and_reap(console_settings, monkeypatch):
+    from console.state import EngineConfig
+
+    console_settings.autostart = False
+    async with await _client(console_settings) as client:
+        app = client.app
+        supervisor = app.state.supervisor
+        term = asyncio.Event()
+        old = None
+        try:
+            async with app.router.lifespan_context(app):
+                await asyncio.sleep(0)
+                await supervisor.deploy(EngineConfig())
+                assert supervisor.status == "ready"
+                old = supervisor.process._process
+                # Имитируем движок, не завершившийся по SIGTERM. Реальные kill и wait остаются.
+                monkeypatch.setattr(old, "send_signal", lambda sig: term.set())
+                stop = supervisor.process.stop
+                monkeypatch.setattr(supervisor.process, "stop", lambda: stop(timeout=0.3))
+                assert (await client.post("/api/deploy", json={"variant": "ml_ctc"})).status_code == 202
+                deploy = app.state.deploy_task
+                await asyncio.wait_for(term.wait(), 5)
+                assert old.returncode is None
+            assert deploy.cancelled() and old.returncode is not None
+            assert not supervisor.process.is_running
+        finally:
+            if old is not None and old.returncode is None:
+                old.kill()
+                await old.wait()
+
+
 async def test_restore_error_does_not_skip_process_cleanup(client_stopped, monkeypatch):
     app = client_stopped.app
     supervisor = app.state.supervisor

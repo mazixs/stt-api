@@ -394,6 +394,13 @@ class Supervisor:
                 "start.failed",
                 {"variant": failed.variant, "reason": reason},
             )
+            # Если не запустилась сама последняя рабочая конфигурация, откатывать
+            # некуда. Сторож повторяет запуск с паузами, без повторного deploy/download.
+            if target == failed and not self._shutting_down and (
+                self._restart_task is None or self._restart_task.done()
+            ):
+                self._recovery_operation = operation_id
+                self._restart_task = asyncio.create_task(self._restart_loop(operation_id))
             return
         self._deploying = target.variant
         self._set_status(
