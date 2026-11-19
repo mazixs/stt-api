@@ -197,7 +197,7 @@ key. Comparison also requires an explicit opt-in.
 | `GET /api/journal` | yes | Structured deployment and engine events |
 | `GET /api/events` | yes | SSE: status, download progress, technical logs |
 | `GET /api/docs`, `/api/openapi.json` | yes | Swagger UI and the schema of the control API |
-| `GET /health` | no | Console liveness; returns `engine_detail_code`, not error text. See `/api/status` for `detail` |
+| `GET /health` | no | Console liveness. `engine_detail` is a fixed status message; `engine_detail_code` is machine-readable. Diagnostic text is in `/api/status` (`detail`) |
 
 Use `Authorization: Bearer <key>` in API clients. Query authentication is accepted
 only on `GET /api/events`, `GET /api/docs`, and `GET /api/openapi.json` for the

@@ -297,13 +297,33 @@ async def test_stop_during_watchdog_delay_cancels_recovery(client_ready, monkeyp
 async def test_watchdog_recovers_running_head_after_failed_download(client_ready, monkeypatch):
     supervisor = client_ready.app.state.supervisor
     monkeypatch.setattr(supervisor_module, "BACKOFF_DELAYS", (0.0,))
-    monkeypatch.setenv("FAKE_DOWNLOAD_FAIL", "disk")
+    download = supervisor_module.download
+
+    async def download_with_broken_ml_ctc(settings, variant, on_event):
+        with monkeypatch.context() as patch:
+            if variant == "ml_ctc":
+                patch.setenv("FAKE_DOWNLOAD_FAIL", "disk")
+            return await download(settings, variant, on_event)
+
+    monkeypatch.setattr(supervisor_module, "download", download_with_broken_ml_ctc)
     await supervisor.deploy(EngineConfig(variant="ml_ctc"))
+    assert supervisor.detail_code == "download.failed"
     assert supervisor.current.variant == "rnnt" and supervisor.desired.variant == "ml_ctc"
     supervisor.process._process.kill()
     await wait_for(lambda: supervisor.detail_code == "watchdog.ready", timeout=15)
     assert supervisor.current.variant == "rnnt"
     assert (await _events(client_ready))[0]["params"]["variant"] == "rnnt"
+
+    await supervisor.shutdown()
+    async with await _client(supervisor.settings) as restarted:
+        restored = restarted.app.state.supervisor
+        try:
+            await restored.restore_on_boot()
+            assert restored.status == "ready" and restored.current.variant == "rnnt"
+            assert (await restored.health())["model"] == "gigaam-v3-rnnt"
+            _check_operation(await _events(restarted), _RNNT_DEPLOY)
+        finally:
+            await restored.shutdown()
 
 
 async def test_journal_restricts_fields_and_does_not_evade_standard_auth(

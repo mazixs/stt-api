@@ -34,6 +34,13 @@ from .vocab import head_alphabet, split_representable
 router = APIRouter()
 admin = APIRouter(prefix="/api", dependencies=[Depends(require_api_key)])
 STARTED_AT = time.monotonic()
+_PUBLIC_ENGINE_DETAIL = {
+    "stopped": "Движок остановлен",
+    "downloading": "Загрузка модели",
+    "starting": "Движок запускается",
+    "ready": "Движок готов",
+    "error": "Ошибка движка",
+}
 
 
 class DeployRequest(BaseModel):
@@ -83,6 +90,7 @@ async def health(request: Request) -> dict[str, Any]:
         "status": "ok",
         "engine_status": supervisor.status,
         # Свободный текст ошибок, включая пути ОС, остаётся в закрытом /api/status.
+        "engine_detail": _PUBLIC_ENGINE_DETAIL.get(supervisor.status, "Состояние движка неизвестно"),
         "engine_detail_code": supervisor.detail_code,
         "variant": supervisor.current.variant if supervisor.current else None,
     }

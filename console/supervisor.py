@@ -631,6 +631,7 @@ class Supervisor:
                     "watchdog.restarting", operation_id, variant=cfg.variant, attempt=attempt
                 )
                 if await self._start_and_wait(cfg, STARTUP_TIMEOUT):
+                    self._desired = cfg
                     self._consecutive_failures = 0
                     self._backoff_index = 0
                     self._set_status(

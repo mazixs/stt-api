@@ -199,7 +199,7 @@ WAV, MP3, M4A/AAC, OGG/Vorbis, OGG/Opus, FLAC и WebM/Opus. Поле `model` м�
 | `GET /api/journal` | да | Структурированные события развёртывания и работы движка |
 | `GET /api/events` | да | SSE: статус, прогресс скачивания, технические логи |
 | `GET /api/docs`, `/api/openapi.json` | да | Swagger UI и схема управляющего API |
-| `GET /health` | нет | Доступность консоли. Возвращает `engine_detail_code`, без текста ошибки; полный `detail` — в `/api/status` |
+| `GET /health` | нет | Доступность консоли. `engine_detail` — фиксированная фраза по статусу, `engine_detail_code` — машиночитаемый код. Текст ошибки — в поле `detail` ответа `/api/status` |
 
 В API-клиентах передавайте ключ заголовком `Authorization: Bearer <ключ>`.
 Ключ в параметре URL принимают только `GET /api/events`, `GET /api/docs` и
