@@ -46,6 +46,19 @@ class LocalizedError extends Error {
   get message() { return t(this.key, this.params); }
 }
 
+async function readSession(signal) {
+  const r = await fetch("/auth/session", {mode:"same-origin", credentials:"same-origin", redirect:"error", cache:"no-store", signal});
+  if (!r.ok) throw new LocalizedError("auth.checkFailed");
+  return r.json();
+}
+function acceptOwnerSession(session) {
+  if (session.mode !== "owner") throw new LocalizedError("auth.checkFailed");
+  if (session.authenticated === false) returnToLogin();
+  if (state.leaving || session.authenticated !== true || typeof session.csrf_token !== "string" || !session.csrf_token) throw new LocalizedError("auth.checkFailed");
+  state.csrf = session.csrf_token;
+  state.jsonLimit = Number.isSafeInteger(session.json_limit_bytes) && session.json_limit_bytes > 0 ? session.json_limit_bytes : 1024 * 1024;
+}
+
 async function api(path, options, retry) {
   const opts = Object.assign({}, options || {});
   if (!state.mode || state.leaving) throw new LocalizedError("auth.unavailable");
@@ -63,9 +76,10 @@ async function api(path, options, retry) {
     }
   }
   if (!response.ok) {
-    let error = new LocalizedError("api.error", { status: response.status });
+    let error = new LocalizedError("api.error", { status: response.status }), code;
     try {
       const body = await response.json();
+      code = body?.error?.code;
       if (body?.error?.message) {
         const key = "error." + body.error.code;
         error = t(key) === key ? new Error(body.error.message) : new LocalizedError(key);
@@ -73,6 +87,13 @@ async function api(path, options, retry) {
       else if (body && body.detail) error = new Error(typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail));
     } catch (err) {
       /* тело не JSON — оставляем код */
+    }
+    // Только эта ошибка гарантирует, что сервер ещё не приступил к записи.
+    if (!retry && state.mode === "owner" && opts.headers["X-CSRF-Token"] && response.status === 403 && code === "invalid_csrf") {
+      opts.signal?.throwIfAborted();
+      const session = await readSession(opts.signal);
+      opts.signal?.throwIfAborted(); acceptOwnerSession(session);
+      return api(path, options, true);
     }
     error.status = response.status;
     throw error;
@@ -609,27 +630,27 @@ function droppedHint(alphabet, head) {
 
 /* --- правка списка --- */
 
+function mergedPhrases(raw) {
+  const entries = [...glossary.entries], indices = new Map();
+  entries.forEach((entry, index) => { const key = fold(entry.phrase); if (!indices.has(key)) indices.set(key, index); });
+  const incoming = parseGlossary(raw); let duplicate = null, added = 0;
+  for (const entry of incoming) {
+    const key = fold(entry.phrase);
+    if (indices.has(key)) { duplicate = indices.get(key); continue; }
+    indices.set(key, entries.length); entries.push(entry); ++added;
+  }
+  return {entries, added, duplicate, skipped:incoming.length - added};
+}
 function addPhrases(raw) {
-  const added = [];
-  let duplicate = null;
-  parseGlossary(raw).forEach((entry) => {
-    const twin = glossary.entries.findIndex((item) => fold(item.phrase) === fold(entry.phrase));
-    if (twin >= 0) {
-      duplicate = twin;
-      return;
-    }
-    glossary.entries.push(entry);
-    added.push(entry.phrase);
-  });
-
-  renderGlossary(null);
-  if (added.length) {
+  const {entries, added, duplicate} = mergedPhrases(raw);
+  glossary.entries = entries; renderGlossary(null);
+  if (added) {
     setGlossaryHint(() => t("glossary.added"));
   } else if (duplicate !== null) {
     setGlossaryHint(() => t("glossary.duplicate"));
     flashChip(duplicate);
   }
-  return added.length;
+  return added;
 }
 
 function flashChip(index) {
@@ -657,15 +678,25 @@ function commitInput() {
 
 /* Форматирование берёт на себя сервер: разберёт запятые, веса после вертикальной
    черты и повторы, а вернёт канонический вид, которым мы и заменяем свой список. */
+function checkedGlossaryBody(text) {
+  const body = JSON.stringify({text});
+  if (state.mode === "owner" && new TextEncoder().encode(body).byteLength > state.jsonLimit) {
+    setGlossaryHint(() => t("glossary.jsonLimit", {limit:state.jsonLimit.toLocaleString(currentLang())}));
+    return null;
+  }
+  return body;
+}
 async function sendGlossary(text) {
   if (!glossary.loaded || glossary.saving) return;
+  const body = checkedGlossaryBody(text);
+  if (body === null) return;
   glossary.saving = true; ++glossary.request; renderGlossary(glossary.payload);
   setGlossaryHint(() => t("glossary.applying"));
   try {
     const payload = await api("/api/glossary", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      body,
     });
     const key = !payload.applied ? "glossary.applyFailed" : state.status?.engine?.running ? "glossary.applied" : "glossary.stored";
     setGlossaryHint(() => t(key));
@@ -691,17 +722,16 @@ function applyGlossary() {
 /* Импорт дописывает к тому, что есть: повторы отсеются, а стереть собранный руками
    список одним неверным файлом было бы обидно. */
 async function importGlossary(file) {
-  const before = glossary.entries.length;
-  const raw = await file.text();
-  const added = addPhrases(raw);
-  const skipped = parseGlossary(raw).length - added;
+  const {entries, added, skipped} = mergedPhrases(await file.text());
+  if (state.mode === "owner" && checkedGlossaryBody(entryText(entries)) === null) return 0;
+  glossary.entries = entries; renderGlossary(null);
   setGlossaryHint(() => added
     ? t("glossary.imported", {
         added,
         skipped: skipped ? t("glossary.importedSkipped", { count: skipped }) : "",
       })
     : t("glossary.importedNothing"));
-  return glossary.entries.length - before;
+  return added;
 }
 
 function exportGlossary() {
@@ -1044,7 +1074,7 @@ function showPage(focus = false) {
   const requested = location.hash.slice(1), next = pageNames.includes(requested) ? requested : "dict";
   if (page === "dict" && next !== page && (state.recording || audio.starting)) stopRecording(false);
   if (page === "compare" && next !== page) cancelComparison();
-  if (next !== page) { document.querySelector(".manual")?.remove(); if (state.mode === "owner") ownerAccess.clear(); }
+  if (next !== page) { document.querySelector(".manual")?.remove(); if (state.mode === "owner") ownerAccess.changeSection(); }
   const changed = next !== page; page = next;
   for (const node of document.querySelectorAll("[data-page]")) node.hidden = node.dataset.page !== page;
   for (const link of document.querySelectorAll("#railnav a")) {
@@ -1358,14 +1388,10 @@ async function checkSession() {
   retry.hidden = true; setText("session-message", t("auth.checking"));
   try {
     // До явного ответа local даже не читаем прежний ключ.
-    const response = await fetch("/auth/session", {mode:"same-origin", credentials:"same-origin", redirect:"error", cache:"no-store"});
-    if (!response.ok) throw new Error();
-    const session = await response.json();
+    const session = await readSession();
     if (session.mode === "owner") {
       try { localStorage.removeItem(KEY_STORAGE); } catch { /* Хранилище отключено. */ }
-      if (session.authenticated === false) { returnToLogin(); return; }
-      if (session.authenticated !== true || !session.csrf_token) throw new Error();
-      state.csrf = session.csrf_token;
+      acceptOwnerSession(session);
     } else if (session.mode === "local") {
       try { state.key = localStorage.getItem(KEY_STORAGE) || ""; }
       catch { /* Хранилище отключено. */ }

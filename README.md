@@ -384,6 +384,14 @@ uv sync          # environment
 uv run pytest    # tests; the engine is stubbed out, nothing is downloaded
 ```
 
+After changing Python dependencies, regenerate the Docker requirements from `uv.lock`:
+
+```sh
+uv export --locked --no-dev --no-emit-project --no-header --no-annotate -o requirements.txt
+```
+
+The export includes exact runtime versions and file hashes. The test suite checks for drift.
+
 The development overlay uses the `stt-api-local` Compose project and local image tag;
 it does not restart after reboot. To run one local instance alongside the base stack,
 use a separate checkout and an unused `HOST_PORT`: both configurations mount `data/`

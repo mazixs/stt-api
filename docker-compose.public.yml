@@ -23,7 +23,9 @@ services:
         ipv4_address: ${KAMERTON_APP_IP:-172.30.91.3}
 
   caddy:
-    image: caddy:2.11.9-alpine
+    build:
+      context: .
+      target: caddy
     restart: unless-stopped
     depends_on:
       stt-api:

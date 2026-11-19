@@ -50,7 +50,9 @@ const ownerAccess = (() => {
     setText("key-secret", ""); setText("key-copy-status", "");
     $("secret-dialog").querySelector(".manual")?.remove();
   }
-  function clear() {
+  let sessionGeneration = 0;
+  function clear() { ++sessionGeneration; changeSection(); }
+  function changeSection() {
     ++generation; ++listRequest;
     erase(); $("secret-dialog").close(); $("revoke-dialog").close(); selected = null;
     notice = ""; revokeError = "";
@@ -59,13 +61,13 @@ const ownerAccess = (() => {
     event.preventDefault(); if (creating || loggingOut) return;
     const input = $("key-name"), name = input.value.trim();
     if (!name) { input.value = ""; input.reportValidity(); return; }
-    const current = generation; creating = true; notice = ""; render();
+    const current = sessionGeneration; creating = true; notice = ""; render();
     try {
       const result = await api("/api/keys", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({name})});
-      if (current !== generation || state.leaving) return;
+      if (current !== sessionGeneration || state.leaving) return;
       if (typeof result.key !== "string" || !result.key) throw new Error();
       input.value = ""; setText("key-secret", result.key); $("secret-dialog").showModal();
-    } catch { if (current === generation) notice = "keys.createFailed"; }
+    } catch { if (current === sessionGeneration) notice = "keys.createFailed"; }
     finally {
       creating = false; render();
       if (page === "api" && !state.leaving && !loggingOut) load();
@@ -107,8 +109,16 @@ const ownerAccess = (() => {
     secret.addEventListener("close", () => { if (!secret.open) { erase(); if (page === "api" && !state.leaving) $("key-name").focus(); } });
     $("revoke-cancel").onclick = () => confirm.close(); $("revoke-confirm").onclick = revoke;
     confirm.addEventListener("close", () => { if (!confirm.open) selected = null; });
+    let lastActivity = -Infinity;
+    const activity = event => {
+      const now = performance.now();
+      if (!event.isTrusted || document.hidden || state.leaving || loggingOut || now - lastActivity < 60000) return;
+      lastActivity = now;
+      api("/auth/activity", {method:"POST"}).catch(() => {});
+    };
+    for (const event of ["pointerdown", "keydown", "input"]) document.addEventListener(event, activity, {capture:true, passive:true});
     window.addEventListener("pagehide", clear);
     window.addEventListener("pageshow", e => { if (e.persisted) location.reload(); });
   }
-  return {bind, clear, load, render};
+  return {bind, clear, changeSection, load, render};
 })();

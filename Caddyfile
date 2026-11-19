@@ -14,7 +14,7 @@ https://{$KAMERTON_DOMAIN} {
 	header {
 		Content-Security-Policy "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:"
 		X-Content-Type-Options nosniff
-		Referrer-Policy no-referrer
+		Referrer-Policy same-origin
 		Permissions-Policy "microphone=(self)"
 	}
 	@private path /health /health/*

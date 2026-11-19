@@ -75,6 +75,63 @@ async def test_network_boundary(owner):
     assert (await client.get("/static/index.html")).status_code == 401
 
 
+async def test_canonical_dns_host_and_strict_origin(managed):
+    managed.public_origin = "https://KamerTON.Test:9443"
+    assert cli(managed, "init").returncode == 0
+    app = create_app(managed)
+    async with http(app) as client:
+        client.headers["Host"] = "KAMERTON.tEsT:9443"
+        page = await client.get("/login")
+        assert page.status_code == 200 and page.headers["referrer-policy"] == "same-origin"
+        for host in ("kamerton.test", "kamerton.test:80", "kamerton.test:443", "kamerton.test.:9443"):
+            assert (await client.get("/login", headers={"Host": host})).status_code == 403
+        for origin in ("null", ORIGIN, "http://kamerton.test:9443", ORIGIN + ":9443/", ORIGIN + ":9443?"):
+            rejected = await client.post("/auth/login", headers={**LOGIN, "Origin": origin}, json=ACCOUNT)
+            assert rejected.status_code == 403 and rejected.json()["error"]["code"] == "invalid_origin"
+        valid = await client.post("/auth/login", headers={**LOGIN, "Origin": ORIGIN + ":9443"}, json=ACCOUNT)
+        assert valid.status_code == 200
+
+
+async def test_authenticated_json_limit_matches_glossary_limit(owner, monkeypatch):
+    client, _ = owner
+    monkeypatch.setattr(owner_access, "JSON_LIMIT", 100)
+    assert "json_limit_bytes" not in (await client.get("/auth/session")).json()
+    result = await login(client)
+    session = (await client.get("/auth/session")).json()
+    assert session["json_limit_bytes"] == 100 and result.json() == session
+    headers = {"Origin": ORIGIN, "X-CSRF-Token": session["csrf_token"], "Content-Type": "application/json"}
+    for size, expected in ((100, 200), (101, 413)):
+        body = b'{"text":"' + b"a" * (size - 11) + b'"}'
+        assert len(body) == size
+        assert (await client.post("/api/glossary", content=body, headers=headers)).status_code == expected
+
+
+async def test_activity_renews_only_idle_after_owner_authorization(owner):
+    client, app = owner
+    assert (await client.post("/auth/activity", headers={"Origin": ORIGIN})).status_code == 401
+    csrf = (await login(client)).json()["csrf_token"]
+    headers = {"Origin": ORIGIN, "X-CSRF-Token": csrf}
+    store = app.state.owner_store
+    with store.connection(write=True) as db:
+        original = time.time() - owner_store.IDLE_SECONDS + 15
+        created = original - 60
+        db.execute("UPDATE sessions SET created=?, touched=?", (created, original))
+    for bad in ({"Origin": "null", "X-CSRF-Token": csrf}, {"Origin": ORIGIN}, {"X-CSRF-Token": csrf}):
+        assert (await client.post("/auth/activity", headers=bad)).status_code == 403
+    assert (await client.get("/auth/activity")).status_code == 405
+    assert (await client.put("/auth/activity", headers=headers)).status_code == 405
+    assert (await client.post("/auth/activity", headers=headers, content=b"x")).status_code == 400
+    with store.connection() as db:
+        assert db.execute("SELECT touched FROM sessions").fetchone()[0] == original
+    response = await client.post("/auth/activity", headers=headers)
+    assert response.status_code == 204 and not response.content
+    with store.connection(write=True) as db:
+        row = db.execute("SELECT created,touched FROM sessions").fetchone()
+        assert row[0] == created and row[1] > original
+        db.execute("UPDATE sessions SET created=?", (time.time() - owner_store.ABSOLUTE_SECONDS,))
+    assert (await client.post("/auth/activity", headers=headers)).status_code == 401
+
+
 async def test_cookie_and_key_are_separate(owner):
     client, app = owner
     result = await login(client)

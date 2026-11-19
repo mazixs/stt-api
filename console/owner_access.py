@@ -55,7 +55,8 @@ def public_network(settings: Settings):
             if parts.port in (0, 80, 443):
                 raise ValueError
             address += f":{parts.port}"
-        if origin != "https://" + address:
+        if not (origin.isascii() and origin.startswith("https://")
+                and origin.removeprefix("https://").lower() == address):
             raise ValueError
     except ValueError:
         raise ValueError("PUBLIC_ORIGIN должен быть точным HTTPS-origin без пути и параметров. "
@@ -68,16 +69,16 @@ def single(request, key):
     return values[0] if len(values) == 1 else None
 
 
-def check_origin(request):
-    if single(request, "origin") != request.app.state.settings.public_origin:
-        raise ApiError(403, "Недопустимый источник запроса.", "invalid_origin")
-
-
 async def live_session(request, *, touch=False):
     token = request.cookies.get(COOKIE, "")
     if not re.fullmatch(r"[A-Za-z0-9_-]{43}", token):
         return None
     return await run_in_threadpool(request.app.state.owner_store.session, token, touch)
+
+
+async def touch_session(request):
+    if not await live_session(request, touch=True):
+        raise ApiError(401, "Войдите в консоль.", "session_required", "authentication_error")
 
 
 async def bounded_body(request, limit):
@@ -93,6 +94,11 @@ class OwnerBoundary:
     def __init__(self, app, network):
         self.app = app
         self.proxy, self.host = network
+        self.origin = "https://" + self.host
+
+    def check_origin(self, request):
+        if single(request, "origin") != self.origin:
+            raise ApiError(403, "Недопустимый источник запроса.", "invalid_origin")
 
     async def authorize(self, request):
         method, path = request.method, request.scope["path"]
@@ -104,7 +110,8 @@ class OwnerBoundary:
             if peer and peer.is_loopback:
                 return
             raise ApiError(403, "Проверка доступна только из контейнера.", "internal_only")
-        if peer != self.proxy or single(request, "host") != self.host or single(request, "x-forwarded-proto") != "https":
+        host = single(request, "host") or ""
+        if peer != self.proxy or host.lower() != self.host or single(request, "x-forwarded-proto") != "https":
             raise ApiError(403, "Требуется доверенный HTTPS-прокси и точный Host.", "untrusted_request")
         if "api_key" in request.query_params:
             raise ApiError(400, "Передача ключа в URL запрещена.", "query_key_forbidden")
@@ -112,7 +119,7 @@ class OwnerBoundary:
             if (method, path) not in CLIENT_ROUTES:
                 raise ApiError(404, "Маршрут не найден.", "not_found")
             if method not in SAFE and request.headers.getlist("origin"):
-                check_origin(request)
+                self.check_origin(request)
             auth = single(request, "authorization") or ""
             scheme, _, key = auth.partition(" ")
             if not (scheme.lower() == "bearer" and key and await run_in_threadpool(request.app.state.owner_store.accepts_key, key)):
@@ -120,14 +127,14 @@ class OwnerBoundary:
             request.state.owner_subject = "client"
             return
         if path == "/auth/login" and method == "POST":
-            check_origin(request)
+            self.check_origin(request)
             if single(request, "x-kamerton-login") != "1":
                 raise ApiError(403, "Не задан заголовок входа.", "invalid_login_request")
             return
         if method == "GET" and path in PUBLIC_GET:
             return
         # SSE и фоновое чтение состояния интерфейсом не являются активностью владельца.
-        passive = path in {"/api/events", "/auth/session", "/api/status", "/api/journal", "/api/models", "/api/glossary"}
+        passive = path in {"/api/events", "/auth/session", "/auth/activity", "/api/status", "/api/journal", "/api/models", "/api/glossary"}
         csrf = await live_session(request, touch=not passive and method in SAFE)
         request.state.owner_csrf = csrf
         if path == "/auth/session" and method == "GET":
@@ -137,12 +144,12 @@ class OwnerBoundary:
                 return RedirectResponse("/login", status_code=303)
             raise ApiError(401, "Войдите в консоль.", "session_required", "authentication_error")
         if method not in SAFE:
-            check_origin(request)
+            self.check_origin(request)
             supplied = (single(request, "x-csrf-token") or "").encode()
             if not hmac.compare_digest(csrf.encode(), supplied):
                 raise ApiError(403, "Неверный токен запроса.", "invalid_csrf")
-            if not await live_session(request, touch=True):
-                raise ApiError(401, "Войдите в консоль.", "session_required", "authentication_error")
+            if path != "/auth/activity":
+                await touch_session(request)
 
         request.state.owner_subject = "owner"
 
@@ -155,7 +162,7 @@ class OwnerBoundary:
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
                 headers["cache-control"] = "no-store"
-                headers["referrer-policy"] = "no-referrer"
+                headers["referrer-policy"] = "same-origin"
             await send(message)
 
         body = None
@@ -163,7 +170,7 @@ class OwnerBoundary:
             response = await self.authorize(request)
             path = scope["path"]
             if (response is None and request.method not in SAFE and not path.startswith("/v1/")
-                    and path not in {"/api/test", "/api/compare"}):
+                    and path not in {"/auth/activity", "/api/test", "/api/compare"}):
                 body = await bounded_body(request, LOGIN_JSON_LIMIT if path in {"/auth/login", "/api/keys"} else JSON_LIMIT)
         except ApiError as exc:
             response = await api_error_handler(request, exc)
@@ -198,6 +205,7 @@ def session_result(csrf):
     result = {"mode": "owner", "authenticated": bool(csrf)}
     if csrf:
         result["csrf_token"] = csrf
+        result["json_limit_bytes"] = JSON_LIMIT
     return result
 
 
@@ -219,6 +227,16 @@ async def login(request: Request):
     response = JSONResponse(session_result(csrf))
     response.set_cookie(COOKIE, token, max_age=ABSOLUTE_SECONDS, secure=True, httponly=True, samesite="strict")
     return response
+
+
+@router.post("/auth/activity", status_code=204)
+async def activity(request: Request):
+    """Обновить idle TTL только после проверки сессии, Origin, CSRF и пустого тела."""
+    async for chunk in request.stream():
+        if chunk:
+            raise ApiError(400, "Запрос активности не должен содержать тело.", "unexpected_body")
+    await touch_session(request)
+    return Response(status_code=204)
 
 
 @router.post("/auth/logout", status_code=204)
