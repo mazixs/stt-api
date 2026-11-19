@@ -59,7 +59,8 @@ def strip_ansi(line: str) -> str:
 
 def engine_env(settings: Settings) -> dict[str, str]:
     """Окружение для дочернего процесса движка."""
-    env = dict(os.environ)
+    private = {"API_KEY", "ADMIN_USERNAME", "ADMIN_PASSWORD", "ADMIN_PASSWORD_FILE"}
+    env = {name: value for name, value in os.environ.items() if name.upper() not in private}
     env["NO_COLOR"] = "1"
     if settings.hf_token:
         env["HF_TOKEN"] = settings.hf_token

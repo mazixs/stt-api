@@ -8,6 +8,7 @@
 *.key
 *.p12
 secrets.*
+secrets/
 data/
 models/
 *.wav

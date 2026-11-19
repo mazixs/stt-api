@@ -13,7 +13,7 @@ const KEY_STORAGE = "stt_console_key";
 const { t, currentLang, setLang, applyStaticTexts } = window.i18n;
 
 const state = {
-  key: (() => { try { return localStorage.getItem(KEY_STORAGE) || ""; } catch { return ""; } })(),
+  mode: null, csrf: "", key: "", leaving: false,
   status: null,
   heads: new Map(),
   catalog: "loading",
@@ -25,10 +25,19 @@ const state = {
 
 /* ---------------------------------------------------------------- транспорт */
 
-function authHeaders(extra) {
+function authHeaders(extra, method = "GET") {
   const headers = Object.assign({}, extra || {});
-  if (state.key) headers["Authorization"] = "Bearer " + state.key;
+  if (state.mode === "local" && state.key) headers.Authorization = "Bearer " + state.key;
+  if (state.mode === "owner" && !["GET", "HEAD"].includes(method.toUpperCase())) headers["X-CSRF-Token"] = state.csrf;
   return headers;
+}
+
+function returnToLogin() {
+  if (state.leaving) return;
+  state.leaving = true; state.csrf = "";
+  clearTimeout(reconnectTimer); eventSource?.close(); ownerAccess.clear();
+  document.querySelector(".shell").hidden = true;
+  location.replace("/login");
 }
 
 /* Текст сохранённой ошибки зависит от текущего языка, а не от языка запроса. */
@@ -37,11 +46,26 @@ class LocalizedError extends Error {
   get message() { return t(this.key, this.params); }
 }
 
+async function readSession(signal) {
+  const r = await fetch("/auth/session", {mode:"same-origin", credentials:"same-origin", redirect:"error", cache:"no-store", signal});
+  if (!r.ok) throw new LocalizedError("auth.checkFailed");
+  return r.json();
+}
+function acceptOwnerSession(session) {
+  if (session.mode !== "owner") throw new LocalizedError("auth.checkFailed");
+  if (session.authenticated === false) returnToLogin();
+  if (state.leaving || session.authenticated !== true || typeof session.csrf_token !== "string" || !session.csrf_token) throw new LocalizedError("auth.checkFailed");
+  state.csrf = session.csrf_token;
+  state.jsonLimit = Number.isSafeInteger(session.json_limit_bytes) && session.json_limit_bytes > 0 ? session.json_limit_bytes : 1024 * 1024;
+}
+
 async function api(path, options, retry) {
   const opts = Object.assign({}, options || {});
-  opts.headers = authHeaders(opts.headers);
-  const response = await fetch(path, {...opts, mode: "same-origin", redirect: "error"});
-  if (response.status === 401 && !retry && !state.keyAsked) {
+  if (!state.mode || state.leaving) throw new LocalizedError("auth.unavailable");
+  opts.headers = authHeaders(opts.headers, opts.method);
+  const response = await fetch(path, {...opts, mode: "same-origin", credentials: "same-origin", redirect: "error", cache:"no-store"});
+  if (response.status === 401 && state.mode === "owner") { returnToLogin(); throw new LocalizedError("auth.denied"); }
+  if (response.status === 401 && state.mode === "local" && !retry && !state.keyAsked) {
     state.keyAsked = true;
     const entered = window.prompt(t("api.keyPrompt"), "");
     if (entered) {
@@ -52,9 +76,10 @@ async function api(path, options, retry) {
     }
   }
   if (!response.ok) {
-    let error = new LocalizedError("api.error", { status: response.status });
+    let error = new LocalizedError("api.error", { status: response.status }), code;
     try {
       const body = await response.json();
+      code = body?.error?.code;
       if (body?.error?.message) {
         const key = "error." + body.error.code;
         error = t(key) === key ? new Error(body.error.message) : new LocalizedError(key);
@@ -62,6 +87,13 @@ async function api(path, options, retry) {
       else if (body && body.detail) error = new Error(typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail));
     } catch (err) {
       /* тело не JSON — оставляем код */
+    }
+    // Только эта ошибка гарантирует, что сервер ещё не приступил к записи.
+    if (!retry && state.mode === "owner" && opts.headers["X-CSRF-Token"] && response.status === 403 && code === "invalid_csrf") {
+      opts.signal?.throwIfAborted();
+      const session = await readSession(opts.signal);
+      opts.signal?.throwIfAborted(); acceptOwnerSession(session);
+      return api(path, options, true);
     }
     error.status = response.status;
     throw error;
@@ -112,7 +144,7 @@ function renderStatus(status) {
   $("ro-restarts").textContent = status.restart_count === undefined ? "—" : status.restart_count;
   $("ro-uptime").textContent = formatUptime(status.uptime_seconds);
   renderRecent(metrics);
-  if (!state.keyOptionSet) { $("example-key").checked = !!status.api_key_set; state.keyOptionSet = true; renderSnippets(); }
+  if (!state.keyOptionSet) { $("example-key").checked = state.mode === "owner" || !!status.api_key_set; state.keyOptionSet = true; renderSnippets(); }
   $("recent-empty").hidden = !!metrics.recent?.length;
   const values = (metrics.recent || []).map(r => r.elapsed).filter(Number.isFinite).sort((a,b) => a-b);
   const mid = values.length >> 1;
@@ -598,27 +630,27 @@ function droppedHint(alphabet, head) {
 
 /* --- правка списка --- */
 
+function mergedPhrases(raw) {
+  const entries = [...glossary.entries], indices = new Map();
+  entries.forEach((entry, index) => { const key = fold(entry.phrase); if (!indices.has(key)) indices.set(key, index); });
+  const incoming = parseGlossary(raw); let duplicate = null, added = 0;
+  for (const entry of incoming) {
+    const key = fold(entry.phrase);
+    if (indices.has(key)) { duplicate = indices.get(key); continue; }
+    indices.set(key, entries.length); entries.push(entry); ++added;
+  }
+  return {entries, added, duplicate, skipped:incoming.length - added};
+}
 function addPhrases(raw) {
-  const added = [];
-  let duplicate = null;
-  parseGlossary(raw).forEach((entry) => {
-    const twin = glossary.entries.findIndex((item) => fold(item.phrase) === fold(entry.phrase));
-    if (twin >= 0) {
-      duplicate = twin;
-      return;
-    }
-    glossary.entries.push(entry);
-    added.push(entry.phrase);
-  });
-
-  renderGlossary(null);
-  if (added.length) {
+  const {entries, added, duplicate} = mergedPhrases(raw);
+  glossary.entries = entries; renderGlossary(null);
+  if (added) {
     setGlossaryHint(() => t("glossary.added"));
   } else if (duplicate !== null) {
     setGlossaryHint(() => t("glossary.duplicate"));
     flashChip(duplicate);
   }
-  return added.length;
+  return added;
 }
 
 function flashChip(index) {
@@ -646,15 +678,25 @@ function commitInput() {
 
 /* Форматирование берёт на себя сервер: разберёт запятые, веса после вертикальной
    черты и повторы, а вернёт канонический вид, которым мы и заменяем свой список. */
+function checkedGlossaryBody(text) {
+  const body = JSON.stringify({text});
+  if (state.mode === "owner" && new TextEncoder().encode(body).byteLength > state.jsonLimit) {
+    setGlossaryHint(() => t("glossary.jsonLimit", {limit:state.jsonLimit.toLocaleString(currentLang())}));
+    return null;
+  }
+  return body;
+}
 async function sendGlossary(text) {
   if (!glossary.loaded || glossary.saving) return;
+  const body = checkedGlossaryBody(text);
+  if (body === null) return;
   glossary.saving = true; ++glossary.request; renderGlossary(glossary.payload);
   setGlossaryHint(() => t("glossary.applying"));
   try {
     const payload = await api("/api/glossary", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      body,
     });
     const key = !payload.applied ? "glossary.applyFailed" : state.status?.engine?.running ? "glossary.applied" : "glossary.stored";
     setGlossaryHint(() => t(key));
@@ -680,17 +722,16 @@ function applyGlossary() {
 /* Импорт дописывает к тому, что есть: повторы отсеются, а стереть собранный руками
    список одним неверным файлом было бы обидно. */
 async function importGlossary(file) {
-  const before = glossary.entries.length;
-  const raw = await file.text();
-  const added = addPhrases(raw);
-  const skipped = parseGlossary(raw).length - added;
+  const {entries, added, skipped} = mergedPhrases(await file.text());
+  if (state.mode === "owner" && checkedGlossaryBody(entryText(entries)) === null) return 0;
+  glossary.entries = entries; renderGlossary(null);
   setGlossaryHint(() => added
     ? t("glossary.imported", {
         added,
         skipped: skipped ? t("glossary.importedSkipped", { count: skipped }) : "",
       })
     : t("glossary.importedNothing"));
-  return glossary.entries.length - before;
+  return added;
 }
 
 function exportGlossary() {
@@ -793,17 +834,6 @@ function renderLatency(payload) {
 
 const TARGET_RATE = 16000;
 
-const WORKLET_SOURCE = `
-class Capture extends AudioWorkletProcessor {
-  process(inputs) {
-    const channel = inputs[0] && inputs[0][0];
-    if (channel) this.port.postMessage(new Float32Array(channel));
-    return true;
-  }
-}
-registerProcessor('capture', Capture);
-`;
-
 async function startRecording(generation) {
   const stream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1, echoCancellation:true, noiseSuppression:true}});
   let ctx;
@@ -824,8 +854,7 @@ async function startRecording(generation) {
     };
     let node;
     if (ctx.audioWorklet) {
-      const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], {type:"application/javascript"}));
-      try { await ctx.audioWorklet.addModule(url); } finally { URL.revokeObjectURL(url); }
+      await ctx.audioWorklet.addModule("/static/capture-worklet.js");
       node = new AudioWorkletNode(ctx, "capture");
       node.port.onmessage = e => onChunk(e.data);
     } else {
@@ -947,6 +976,7 @@ function exampleOrigin() {
   if (!/^https?:\/\/[^\s/@?#\\]+\/?$/i.test(raw)) return null;
   try {
     const url = new URL(raw);
+    if (state.mode === "owner" && url.protocol !== "https:") return null;
     return /^[a-z\d.:[\]_-]+$/i.test(url.host) ? url.origin : null;
   } catch { return null; }
 }
@@ -955,7 +985,7 @@ function renderSnippets() {
   const file = t("snippet.file"), sep = " \\\n  ";
   const bearer = auth ? [ '-H "Authorization: Bearer $STT_API_KEY"' ] : [];
   $("example-origin").setAttribute("aria-invalid", String(!origin));
-  $("address-error").textContent = origin ? "" : t("api.invalid");
+  $("address-error").textContent = origin ? "" : t(state.mode === "owner" ? "auth.addressInvalid" : "api.invalid");
   $("base-url").textContent = origin ? origin + "/v1" : "—";
   $("snip-curl").textContent = origin ? [`curl -X POST '${origin}/v1/audio/transcriptions'`, ...bearer, "-F 'model=whisper-1'", `-F 'file=@${file}'`].join(sep) : "—";
   $("snip-models").textContent = origin ? [`curl '${origin}/v1/models'`, ...bearer].join(sep) : "—";
@@ -963,7 +993,7 @@ function renderSnippets() {
     `client = OpenAI(base_url="${origin}/v1", api_key=${auth ? 'os.environ["STT_API_KEY"]' : '"not-needed"'})\n` +
     `with open("${file}", "rb") as audio:\n    result = client.audio.transcriptions.create(model="whisper-1", file=audio)\nprint(result.text)` : "—";
   document.querySelectorAll('[data-page="api"] .copy').forEach(b => b.disabled = !origin);
-  $("link-docs").href = state.key ? "/api/docs?api_key=" + encodeURIComponent(state.key) : "/api/docs";
+  $("link-docs").href = state.mode === "local" && state.key ? "/api/docs?api_key=" + encodeURIComponent(state.key) : "/api/docs";
 }
 let modelsRequest = 0;
 async function readServiceModels() {
@@ -971,7 +1001,7 @@ async function readServiceModels() {
   if (!box.open) { setText("model-response", ""); return; }
   setText("model-response", t("state.loading"));
   try {
-    const result = await api("/v1/models");
+    const result = await (state.mode === "owner" ? api("/api/client-models") : api("/v1/models"));
     if (request === modelsRequest && box.open) setText("model-response", JSON.stringify(result, null, 2));
   } catch (err) {
     if (request === modelsRequest && box.open) setText("model-response", err.message);
@@ -988,7 +1018,9 @@ async function copyText(button) {
   document.querySelector(".manual")?.remove();
   try {
     await navigator.clipboard.writeText(text);
-    if (owner === page) toast(t("btn.copied"));
+    if (owner !== page || target.textContent !== text) return;
+    if (target.id === "key-secret") setText("key-copy-status", t("btn.copied"));
+    else toast(t("btn.copied"));
   } catch {
     if (owner !== page || !button.isConnected || target.textContent !== text) return;
     const box = el("label", t("copy.manual"), "field manual"), area = el("textarea");
@@ -1042,7 +1074,7 @@ function showPage(focus = false) {
   const requested = location.hash.slice(1), next = pageNames.includes(requested) ? requested : "dict";
   if (page === "dict" && next !== page && (state.recording || audio.starting)) stopRecording(false);
   if (page === "compare" && next !== page) cancelComparison();
-  if (next !== page) document.querySelector(".manual")?.remove();
+  if (next !== page) { document.querySelector(".manual")?.remove(); if (state.mode === "owner") ownerAccess.changeSection(); }
   const changed = next !== page; page = next;
   for (const node of document.querySelectorAll("[data-page]")) node.hidden = node.dataset.page !== page;
   for (const link of document.querySelectorAll("#railnav a")) {
@@ -1051,6 +1083,7 @@ function showPage(focus = false) {
   $("mobile-nav").value = page; $("heading").textContent = t("page." + page); $("intro").textContent = t("intro." + page);
   document.title = t("page." + page) + " — " + t("brand.name");
   if (focus) { $("main").focus({preventScroll:true}); window.scrollTo(0,0); }
+  if (changed && page === "api" && state.mode === "owner") ownerAccess.load();
   if (changed && page === "journal") loadJournal();
   if (changed && (page === "models" || page === "compare")) loadHeads();
   if (changed && page === "glossary" && !glossary.saving) loadGlossary();
@@ -1075,6 +1108,7 @@ function localizedOptions() {
 }
 function localize() {
   applyStaticTexts(); localizedOptions(); renderRichTexts(); renderSnippets(); markLangButtons();
+  if (state.mode === "owner") ownerAccess.render();
   showPage(); renderAudio(); renderGlossary(glossary.payload); renderJournal(); renderCompare(true);
   if (state.status) renderStatus(state.status);
   else if (state.statusError) { renderStop(); setText("state-detail", state.statusError.message); setText("state-label", t("state.offline")); }
@@ -1106,7 +1140,8 @@ function appendLog(line) {
 let eventSource, reconnectTimer;
 function connectEvents() {
   clearTimeout(reconnectTimer); eventSource?.close();
-  const query = state.key ? "?api_key=" + encodeURIComponent(state.key) : "";
+  if (state.leaving) return;
+  const query = state.mode === "local" && state.key ? "?api_key=" + encodeURIComponent(state.key) : "";
   const source = new EventSource("/api/events" + query);
   eventSource = source;
   source.onmessage = (event) => {
@@ -1183,7 +1218,7 @@ function renderCompare(force = false) {
   const downloaded = [...state.heads.values()].map(item => item.head).filter(head => head.downloaded);
   const enabled = state.status?.compare_enabled === true, changing = deployBusy(state.status?.status);
   const available = enabled && state.catalog === "ready" && downloaded.length >= 2 && !changing;
-  const message = !state.status ? "audio.awaitStatus" : !enabled ? "compare.disabled" : changing ? "compare.engineChanging"
+  const message = !state.status ? "audio.awaitStatus" : !enabled ? (state.mode === "owner" ? "compare.ownerDisabled" : "compare.disabled") : changing ? "compare.engineChanging"
     : state.catalog === "loading" ? "compare.catalogLoading" : state.catalog === "error" ? "compare.catalogError"
     : downloaded.length < 2 ? "compare.weights" : "compare.method";
   setText("compare-availability", !state.status && state.statusError?.message || t(message));
@@ -1305,7 +1340,10 @@ function init() {
   $("heads").onchange = e => { state.selected = e.target.value; state.configDirty = true; renderSelection(); };
   $("config-form").oninput = () => { state.configDirty = true; renderDeploying(state.status || {}); };
   $("config-form").onsubmit = e => { e.preventDefault(); if (!$("btn-deploy").disabled) deploy(state.selected); };
-  $("edit-key").onclick = async () => {
+  $("legacy-access").hidden = state.mode !== "local";
+  $("edit-key").disabled = state.mode !== "local";
+  if (state.mode === "owner") ownerAccess.bind();
+  else $("edit-key").onclick = async () => {
     const entered = window.prompt(t("api.keyPrompt"), "");
     if (entered === null) return;
     $("service-models").open = false;
@@ -1345,4 +1383,24 @@ function init() {
   setInterval(() => { refreshStatus(); if (page === "journal") loadJournal(); }, 5000);
 }
 
-init();
+async function checkSession() {
+  const retry = $("session-retry");
+  retry.hidden = true; setText("session-message", t("auth.checking"));
+  try {
+    // До явного ответа local даже не читаем прежний ключ.
+    const session = await readSession();
+    if (session.mode === "owner") {
+      try { localStorage.removeItem(KEY_STORAGE); } catch { /* Хранилище отключено. */ }
+      acceptOwnerSession(session);
+    } else if (session.mode === "local") {
+      try { state.key = localStorage.getItem(KEY_STORAGE) || ""; }
+      catch { /* Хранилище отключено. */ }
+    } else throw new Error();
+    state.mode = session.mode;
+  } catch {
+    setText("session-message", t("auth.checkFailed")); retry.textContent = t("head.retry"); retry.hidden = false; return;
+  }
+  $("session-check").hidden = true; document.querySelector(".shell").hidden = false; init();
+}
+$("session-retry").onclick = checkSession;
+checkSession();

@@ -12,8 +12,11 @@ at `/api/openapi.json` (`info.version`) read it from there.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-19
+
 ### Added
 
+- Optional [HTTPS owner profile](docs/public-access.md): sign in to the console with one owner account and issue separate, revocable Bearer keys to applications. Caddy is the only published service. Initialize or recover the owner with the offline CLI; the base Compose file keeps its local port and key behavior.
 - `GET /api/journal` exposes a bounded in-memory history of deployment and engine events, separate from technical logs.
 - Optional model comparison runs two downloaded models on one file without switching the live engine. It requires `ENABLE_MODEL_COMPARE=1` and a non-empty `API_KEY`.
 - The web console is bilingual. English is the default and Russian is switched on with
@@ -53,8 +56,14 @@ at `/api/openapi.json` (`info.version`) read it from there.
   dictation clients put their own dictionary in that field and send it to any
   self-hosted endpoint; the engine is a transducer and never reads it.
 
+### Security
+
+- Updated `certifi` to `2026.10.23`, which no longer trusts the affected emSign chain ([GHSA-6q48-6c7w-9gw2](https://osv.dev/vulnerability/GHSA-6q48-6c7w-9gw2)). The Docker requirements are exported from `uv.lock` with exact versions and hashes.
+- Apply current security updates to the Debian and Alpine layers during a fresh build. The application image no longer includes the Python package installer.
+
 ### Fixed
 
+- The Python wheel includes the web console and its static assets.
 - A failed model change no longer hides the stop button while the previous engine is running. A failed stop remains visible even after the status refreshes.
 - Changing the Bearer option clears the stale manual-copy field in API examples.
 - The local Compose overlay uses a separate project and image tag so it does not replace the base project's service or image.
@@ -231,7 +240,8 @@ fixes, not construction.
 - Licensed under Apache 2.0; the repository history begins with a single commit made
   when the sources were opened.
 
-[Unreleased]: https://github.com/mazixs/stt-api/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/mazixs/stt-api/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/mazixs/stt-api/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/mazixs/stt-api/releases/tag/v1.4.0
 [1.3.0]: https://github.com/mazixs/stt-api/releases/tag/v1.3.0
 [1.2.0]: https://github.com/mazixs/stt-api/releases/tag/v1.2.0

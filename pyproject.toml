@@ -5,11 +5,16 @@ description = "Web console and OpenAI-compatible facade for the GigaSTT (GigaAM 
 license = "Apache-2.0"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.34",
-    "httpx>=0.28",
-    "pydantic-settings>=2.7",
-    "python-multipart>=0.0.20",
+    "fastapi>=0.165.0",
+    "starlette>=1.10.0",
+    "uvicorn[standard]>=0.54.0",
+    "httpx>=0.28.1",
+    # httpx не задаёт нижнюю границу для хранилища корней TLS (GHSA-6q48-6c7w-9gw2).
+    "certifi>=2026.10.23",
+    "pydantic>=2.14.3",
+    "pydantic-settings>=2.16.3",
+    "python-multipart>=0.0.34",
+    "argon2-cffi>=25.1.0",
 ]
 
 [dependency-groups]
@@ -20,6 +25,9 @@ dev = [
 
 [tool.setuptools]
 packages = ["console"]
+
+[tool.setuptools.package-data]
+console = ["static/*"]
 
 [tool.setuptools.dynamic]
 version = { attr = "console.__version__" }

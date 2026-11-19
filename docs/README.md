@@ -8,6 +8,7 @@
 | [research/long-form-seams.md](research/long-form-seams.md) | Как склейка окон меняет текст длинной записи |
 | [stt-event-log.md](stt-event-log.md) | Какие события попадают в журнал и какие данные он не хранит |
 | [open-questions.md](open-questions.md) | Что осталось незакрытым и что с этим делать |
+| [public-access.md](public-access.md) | HTTPS с Caddy: вход владельца, выдача ключей, перенос и возврат к локальному режиму |
 | [manual-smoke.md](manual-smoke.md) | Ручной сценарий проверки на живом движке |
 
 Как пользоваться сервисом — в корневом [README](../README.ru.md). Он намеренно

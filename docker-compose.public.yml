@@ -1,0 +1,74 @@
+# Наложение к docker-compose.yml. Инструкция: docs/public-access.md.
+services:
+  stt-api:
+    container_name: !reset null
+    image: ${KAMERTON_IMAGE:-stt-api-console:owner}
+    ports: !reset []
+    # Старый .env может содержать API_KEY или пароль: не загружаем его в контейнер.
+    env_file: !reset []
+    environment:
+      OWNER_ACCESS: "1"
+      PUBLIC_ORIGIN: https://${KAMERTON_DOMAIN:?Set KAMERTON_DOMAIN}
+      TRUSTED_PROXY_IP: ${KAMERTON_CADDY_IP:-172.30.91.2}
+      AUTOSTART: ${AUTOSTART:-1}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-150}
+      ENABLE_MODEL_COMPARE: ${ENABLE_MODEL_COMPARE:-0}
+      ENABLE_JOBS: ${ENABLE_JOBS:-0}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      HF_TOKEN: ${HF_TOKEN:-}
+    command: ["python", "-m", "uvicorn", "console.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080", "--no-proxy-headers", "--no-access-log", "--timeout-graceful-shutdown", "15"]
+    networks:
+      owner:
+        # Оба адреса фиксированы: приложение запускается раньше Caddy.
+        ipv4_address: ${KAMERTON_APP_IP:-172.30.91.3}
+
+  caddy:
+    build:
+      context: .
+      target: caddy
+    restart: unless-stopped
+    depends_on:
+      stt-api:
+        condition: service_healthy
+    environment:
+      KAMERTON_DOMAIN: ${KAMERTON_DOMAIN:?Set KAMERTON_DOMAIN}
+    ports:
+      - "${CADDY_BIND:-0.0.0.0}:80:80"
+      - "${CADDY_BIND:-0.0.0.0}:443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      owner:
+        ipv4_address: ${KAMERTON_CADDY_IP:-172.30.91.2}
+
+  owner-cli:
+    profiles: [setup]
+    image: ${KAMERTON_IMAGE:-stt-api-console:owner}
+    pull_policy: never
+    entrypoint: ["python", "-m", "console.owner_cli"]
+    command: ["--help"]
+    restart: "no"
+    network_mode: none
+    healthcheck:
+      disable: true
+    env_file:
+      - path: .env.owner
+        required: false
+    environment:
+      DATA_DIR: /data
+    volumes:
+      - ./data:/data
+
+networks:
+  # Обычный bridge оставляет NAT для скачивания весов и выпуска сертификатов.
+  owner:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${KAMERTON_SUBNET:-172.30.91.0/28}
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -4,25 +4,34 @@
 ARG GIGASTT_TAG=2.22.0
 FROM ghcr.io/ekhodzitsky/gigastt:${GIGASTT_TAG} AS engine
 
-# The upstream binary needs trixie's libstdc++; it decodes audio without ffmpeg.
-FROM debian:trixie-slim
+# Keep the official Caddy binary; refresh Alpine security packages.
+FROM caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0 AS caddy
+RUN apk upgrade --no-cache
 
+# The engine needs trixie's libstdc++; security fixes can postdate the base image.
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS runtime-base
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates curl procps \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends python3 ca-certificates curl procps \
     && rm -rf /var/lib/apt/lists/*
-
-COPY --from=engine /usr/local/bin/gigastt /usr/local/bin/gigastt
 
 ENV VIRTUAL_ENV=/opt/venv \
     PATH=/opt/venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
-RUN python3 -m venv "$VIRTUAL_ENV"
 
+# Keep pip and build-time wheels out of the runtime image.
+FROM runtime-base AS dependencies
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3-venv \
+    && python3 -m venv "$VIRTUAL_ENV"
 COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r /tmp/requirements.txt \
-    && rm /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt \
+    && pip uninstall -y pip
+
+FROM runtime-base AS app
+COPY --from=dependencies /opt/venv /opt/venv
+COPY --from=engine /usr/local/bin/gigastt /usr/local/bin/gigastt
 
 WORKDIR /app
 COPY console/ /app/console/

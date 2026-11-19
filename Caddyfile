@@ -1,0 +1,29 @@
+{
+	admin off
+	servers {
+		protocols h1 h2
+		strict_sni_host
+	}
+	# Ошибки проксирования могут содержать URL и заголовки запроса.
+	log default {
+		exclude http
+	}
+}
+
+https://{$KAMERTON_DOMAIN} {
+	header {
+		Content-Security-Policy "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:"
+		X-Content-Type-Options nosniff
+		>Referrer-Policy same-origin
+		Permissions-Policy "microphone=(self)"
+	}
+	@private path /health /health/*
+	respond @private 404
+
+	reverse_proxy stt-api:8080 {
+		header_up -Forwarded
+		header_up Host {http.request.hostport}
+		# Caddy сам задаёт X-Forwarded-Host/For/Proto по принятому соединению.
+		header_up X-Kamerton-Client-IP {remote_host}
+	}
+}
