@@ -36,7 +36,7 @@ at `/api/openapi.json` (`info.version`) read it from there.
 
 ### Changed
 
-- The public `/health` response replaces the free-form `engine_detail` field with `engine_detail_code`. Diagnostic text remains available as `detail` in `/api/status`.
+- The public `/health` response keeps the `engine_detail` string, now a fixed message for each engine status, and adds `engine_detail_code`. Diagnostic text remains available as `detail` in `/api/status`.
 - Transcription metrics no longer count a stream interrupted while reading the engine response as a successful run.
 - Docker Compose now binds the console to loopback by default. For remote access, see the [Quick start](README.md#quick-start).
 - API clients must send the key as `Authorization: Bearer`. Query keys remain accepted only for `GET /api/events`, `GET /api/docs`, and `GET /api/openapi.json`.

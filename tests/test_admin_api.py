@@ -266,6 +266,7 @@ async def test_health_hides_private_error_details(client_ready_with_key):
     supervisor._set_status("error", "private/path", "start.failed")
     public = await client_ready_with_key.get("/health")
     assert public.status_code == 200 and "private/path" not in public.text
+    assert public.json()["engine_detail"] == "Ошибка движка"
     assert public.json()["engine_detail_code"] == "start.failed"
     admin = await client_ready_with_key.get("/api/status", headers={"Authorization": "Bearer secret"})
     assert admin.json()["detail"] == "private/path"
