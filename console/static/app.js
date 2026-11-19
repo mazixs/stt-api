@@ -5,15 +5,21 @@
    без перезагрузки страницы, поэтому готовых строк здесь не остается. */
 
 const $ = (id) => document.getElementById(id);
+function setText(id, value) {
+  const target = $(id);
+  if (target.textContent !== value) target.textContent = value;
+}
 const KEY_STORAGE = "stt_console_key";
 const { t, currentLang, setLang, applyStaticTexts } = window.i18n;
 
 const state = {
-  key: localStorage.getItem(KEY_STORAGE) || "",
+  key: (() => { try { return localStorage.getItem(KEY_STORAGE) || ""; } catch { return ""; } })(),
   status: null,
-  /* Карточки голов строятся один раз и обновляются на месте: пересборка на каждое
-     событие развертывания и была тем морганием, из-за которого прогресс терялся. */
   heads: new Map(),
+  catalog: "loading",
+  selected: null,
+  configDirty: false,
+
   recording: null,
 };
 
@@ -25,29 +31,40 @@ function authHeaders(extra) {
   return headers;
 }
 
+/* Текст сохранённой ошибки зависит от текущего языка, а не от языка запроса. */
+class LocalizedError extends Error {
+  constructor(key, params) { super(); this.key = key; this.params = params; }
+  get message() { return t(this.key, this.params); }
+}
+
 async function api(path, options, retry) {
   const opts = Object.assign({}, options || {});
   opts.headers = authHeaders(opts.headers);
-  const response = await fetch(path, opts);
-  if (response.status === 401 && !retry) {
+  const response = await fetch(path, {...opts, mode: "same-origin", redirect: "error"});
+  if (response.status === 401 && !retry && !state.keyAsked) {
+    state.keyAsked = true;
     const entered = window.prompt(t("api.keyPrompt"), "");
     if (entered) {
       state.key = entered.trim();
-      localStorage.setItem(KEY_STORAGE, state.key);
+      try { localStorage.setItem(KEY_STORAGE, state.key); } catch { /* Только в этой вкладке. */ }
       renderSnippets();
       return api(path, options, true);
     }
   }
   if (!response.ok) {
-    let message = t("api.error", { status: response.status });
+    let error = new LocalizedError("api.error", { status: response.status });
     try {
       const body = await response.json();
-      if (body && body.error && body.error.message) message = body.error.message;
-      else if (body && body.detail) message = JSON.stringify(body.detail);
+      if (body?.error?.message) {
+        const key = "error." + body.error.code;
+        error = t(key) === key ? new Error(body.error.message) : new LocalizedError(key);
+      }
+      else if (body && body.detail) error = new Error(typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail));
     } catch (err) {
       /* тело не JSON — оставляем код */
     }
-    throw new Error(message);
+    error.status = response.status;
+    throw error;
   }
   const type = response.headers.get("content-type") || "";
   return type.indexOf("application/json") === 0 ? response.json() : response.text();
@@ -75,12 +92,14 @@ function detailText(status) {
 }
 
 function renderStatus(status) {
-  state.status = status;
+  state.status = status; state.statusError = "";
   const pill = $("state-pill");
   pill.dataset.state = status.status;
   $("state-label").textContent = stateWord(status.status) || status.status;
   $("state-detail").textContent = detailText(status);
-  $("btn-stop").classList.toggle("hidden", status.status !== "ready");
+  $("ro-state").textContent = stateWord(status.status);
+  $("ro-target").textContent = [status.deploying, status.status === "downloading" && Number.isFinite(status.download_percent) ? status.download_percent + "%" : ""].filter(Boolean).join(" · ") || "—";
+  renderStop();
   $("key-badge").classList.toggle("hidden", !status.api_key_set);
 
   const engine = status.engine || {};
@@ -93,10 +112,17 @@ function renderStatus(status) {
   $("ro-restarts").textContent = status.restart_count === undefined ? "—" : status.restart_count;
   $("ro-uptime").textContent = formatUptime(status.uptime_seconds);
   renderRecent(metrics);
+  if (!state.keyOptionSet) { $("example-key").checked = !!status.api_key_set; state.keyOptionSet = true; renderSnippets(); }
+  $("recent-empty").hidden = !!metrics.recent?.length;
+  const values = (metrics.recent || []).map(r => r.elapsed).filter(Number.isFinite).sort((a,b) => a-b);
+  const mid = values.length >> 1;
+  const median = values.length % 2 ? values[mid] : (values[mid-1] + values[mid]) / 2;
+  $("cur-median").textContent = values.length ? t("audio.sample", {value:median.toFixed(2), count:values.length}) : t("audio.noMetrics");
+  renderCurrent(); renderAudio(); renderCompare();
 
   if (status.defaults) applyDefaults(status.defaults);
   renderEnvDiff(status.env);
-  renderDeploying(status);
+  renderSelection();
   afterStatusSettles(status.status);
 }
 
@@ -109,11 +135,11 @@ const deployBusy = (name) => name === "downloading" || name === "starting";
    фразы. Внутри развертывания перечитывать нечего, там всё ведет renderDeploying. */
 let settledStatus = null;
 function afterStatusSettles(name) {
-  const wasBusy = deployBusy(settledStatus);
+  const prior = settledStatus;
   settledStatus = name;
-  if (!wasBusy || deployBusy(name)) return;
+  if (!prior || prior === name || deployBusy(name)) return;
   loadHeads();
-  loadGlossary(true);
+  if (!glossary.saving) loadGlossary();
 }
 
 /* Состояние сильнее .env намеренно: иначе выбранная здесь голова откатывалась бы к
@@ -148,14 +174,10 @@ function renderEnvDiff(env) {
 async function deployFromEnv() {
   const env = state.status && state.status.env && state.status.env.config;
   if (!env) return;
-  // Форма перезаполняется значениями .env, дальше обычный путь развёртывания.
-  $("opt-punctuation").value = env.punctuation;
-  $("opt-itn").value = env.itn;
-  $("opt-vad").value = String(env.vad);
-  setSelectValue($("opt-pool"), String(env.pool_size));
-  $("opt-hotwords-default").value = String(env.hotwords_default);
-  $("opt-boost").value = String(env.hotwords_boost);
-  setSelectValue($("opt-window-concurrency"), String(env.file_window_concurrency));
+  state.configDirty = false;
+  applyDefaults(env);
+  state.configDirty = true;
+  renderSelection();
   await deploy(env.variant);
 }
 
@@ -217,10 +239,14 @@ function formatUptime(seconds) {
   return t("time.seconds", { seconds });
 }
 
-let defaultsApplied = false;
 function applyDefaults(defaults) {
-  if (defaultsApplied) return;
-  defaultsApplied = true;
+  if (!defaults?.variant) return;
+  if (state.hydrated && state.configDirty) {
+    if (!Object.entries(draftConfig()).every(([k,v]) => defaults[k] === v)) return;
+    state.configDirty = false;
+  }
+  state.hydrated = true;
+  state.selected = defaults.variant;
   $("opt-punctuation").value = defaults.punctuation;
   $("opt-itn").value = defaults.itn;
   $("opt-vad").value = String(defaults.vad);
@@ -234,207 +260,138 @@ async function refreshStatus() {
   try {
     renderStatus(await api("/api/status"));
   } catch (err) {
+    state.status = null; state.statusError = err;
+    $("state-label").textContent = t("state.offline"); $("state-pill").dataset.state = "unknown";
     $("state-detail").textContent = err.message;
+    for (const id of ["ro-state","ro-target","ro-variant","ro-elapsed","ro-rtf","ro-total","ro-restarts","ro-uptime","cur-median"]) $(id).textContent = "—";
+    renderStop(); $("env-diff").classList.add("hidden"); $("key-badge").classList.add("hidden");
+    $("recent").classList.add("hidden"); $("recent-empty").hidden = true;
+    renderAudio(); renderCompare(); renderSelection(); renderCurrent();
   }
 }
 
 /* ------------------------------------------------------------------- модели */
 
+const el = (name, text, cls) => {
+  const node = document.createElement(name);
+  if (text != null) node.textContent = text;
+  if (cls) node.className = cls;
+  return node;
+};
+let catalogRequest = 0;
 async function loadHeads() {
+  const request = ++catalogRequest;
+  state.catalog = "loading"; renderCompare();
   try {
-    // Подписи голов приходят с сервера, поэтому язык спрашивается у него же.
-    renderHeads(await api("/api/models?lang=" + encodeURIComponent(currentLang())));
+    const data = await api("/api/models?lang=" + encodeURIComponent(currentLang()));
+    if (request !== catalogRequest) return;
+    for (const head of data.heads) {
+      let item = state.heads.get(head.id);
+      if (!item) {
+        const row = el("div", null, "modelrow"), radio = el("input"), label = el("label"), note = el("span", null, "modelstate");
+        radio.type = "radio"; radio.name = "target-model"; radio.value = head.id; radio.id = "target-" + head.id;
+        label.htmlFor = radio.id; label.append(head.title, el("code", head.id, "pill"));
+        note.id = radio.id + "-state"; radio.setAttribute("aria-describedby", note.id);
+        row.append(radio, label, note); $("heads").append(row);
+        item = { radio, note }; state.heads.set(head.id, item);
+      }
+      item.head = head;
+    }
+    state.catalog = "ready"; renderSelection(); renderCompare(); renderCurrent();
   } catch (err) {
-    /* каталог не критичен для остальной страницы */
+    if (request === catalogRequest) { state.catalog = "error"; $("head-note").textContent = err.message; renderCompare(); }
   }
 }
 
-/* Карточка строится один раз, дальше меняются только её подписи: перестройка узлов и
-   была тем морганием, из-за которого прогресс развёртывания терялся из виду. */
-function renderHeads(payload) {
-  const container = $("heads");
-  payload.heads.forEach((head) => {
-    let entry = state.heads.get(head.id);
-    if (!entry) {
-      entry = buildHeadCard(head);
-      state.heads.set(head.id, entry);
-      container.appendChild(entry.card);
-    }
-    entry.head = head;
-    entry.card.dataset.deployed = String(head.deployed);
-    entry.downloaded.classList.toggle("hidden", !head.downloaded);
-    entry.button.textContent = headButtonLabel(head);
-    entry.button.className = head.deployed ? "btn btn-quiet" : "btn btn-primary";
-  });
+function renderCurrent() {
+  const engine = state.status?.engine;
+  $("cur-model").textContent = !state.status ? t("audio.unknownModel") :
+    state.heads.get(engine?.variant)?.head.title || engine?.variant || t("audio.noModel");
+  $("cur-id").textContent = engine?.variant || "";
+  for (const [id, name] of [["cur-punct", "punctuation"], ["cur-itn", "itn"]]) {
+    $(id).textContent = engine?.[name] ? t("short." + engine[name]) : "—";
+  }
+}
+
+function renderSelection() {
+  const id = state.selected;
+  const head = state.heads.get(id)?.head;
+  for (const item of state.heads.values()) {
+    item.radio.checked = item.head.id === id;
+    const status = state.status;
+    item.radio.disabled = !state.hydrated || !status?.defaults;
+    const readiness = !status ? t("models.unknownState") : status.deploying === item.head.id && deployBusy(status.status)
+      ? stateWord(status.status) : status.engine?.running && status.engine.variant === item.head.id
+      ? t(status.status === "ready" ? "models.active" : "models.process") : "";
+    item.note.textContent = [readiness,
+      t(item.head.downloaded ? "head.downloaded" : "models.notDownloaded")].filter(Boolean).join(" · ");
+  }
+  $("cfg-model").textContent = head?.title || id || "—";
+  if (head) {
+    $("head-name").textContent = head.title;
+    $("head-meta").replaceChildren(code(id), el("span",head.languages.join(" · ").toUpperCase()), el("span",t("head.size", { mb: head.size_mb })));
+    $("head-description").textContent = head.subtitle;
+    $("head-badge").textContent = head.badge || "";
+    $("head-note").textContent = head.badge_note || "";
+  }
   renderDeploying(state.status || {});
 }
 
-const headButtonLabel = (head) => t(head.deployed ? "head.redeploy" : "head.deploy");
-
-function buildHeadCard(head) {
-  const card = document.createElement("article");
-  card.className = "head";
-
-  const title = document.createElement("h3");
-  title.textContent = head.title;
-  /* Значок - про наш собственный замер, а не про чужую таблицу, поэтому источник
-     висит подсказкой прямо на нём. */
-  if (head.badge) {
-    const badge = document.createElement("span");
-    badge.className = "head-badge";
-    badge.textContent = head.badge;
-    badge.title = head.badge_note || "";
-    title.appendChild(badge);
-  }
-  const subtitle = document.createElement("p");
-  subtitle.textContent = head.subtitle;
-
-  const meta = document.createElement("div");
-  meta.className = "head-meta";
-  meta.appendChild(tag(head.languages.join(" · ")));
-  meta.appendChild(tag(t("head.size", { mb: head.size_mb })));
-  if (head.native_punctuation) meta.appendChild(tag(t("head.nativePunctuation")));
-  // Значок «скачано» создаётся всегда и прячется: иначе его появление пересобирало бы meta.
-  const downloadedTag = tag(t("head.downloaded"), true);
-  downloadedTag.classList.add("hidden");
-  meta.appendChild(downloadedTag);
-
-  const actions = document.createElement("div");
-  actions.className = "head-actions";
-  const button = document.createElement("button");
-  button.type = "button";
-  button.addEventListener("click", () => deploy(head.id));
-  const progress = document.createElement("div");
-  progress.className = "head-progress hidden";
-  progress.innerHTML = '<span class="head-progress-bar"></span><span class="head-progress-text mono"></span>';
-  actions.append(button, progress);
-
-  const error = document.createElement("p");
-  error.className = "head-error mono hidden";
-
-  card.append(title, subtitle, meta, actions, error);
-  return { card, button, progress, error, downloaded: downloadedTag, head };
+function draftConfig() {
+  return {variant: state.selected, punctuation: $("opt-punctuation").value, itn: $("opt-itn").value,
+    vad: $("opt-vad").value === "true", pool_size: Number($("opt-pool").value),
+    file_window_concurrency: Number($("opt-window-concurrency").value), hotwords_boost: $("opt-boost").valueAsNumber,
+    hotwords_default: $("opt-hotwords-default").value === "true"};
 }
-
-/* Фаза развёртывания живёт на карточке цели: пользователь смотрит туда, где нажал.
-   Процентов у проверки весов и сборки графа нет, поэтому полоса там бегущая. */
-
-const SLOW_START_MS = 20000;
-/* Откат узнаётся по коду, а не по слову в тексте: текст двуязычный, код один. */
+let clickedTarget = null, deployPending = false, deployError = "", rollbackStatus = null;
 const isRollback = (status) => String(status.detail_code || "").indexOf("rollback.") === 0;
-
-const PHASE_WORDS = {
-  downloading: (s) => (s.download_percent === null || s.download_percent === undefined)
-    ? t("phase.verifying")
-    : t("phase.downloading", { percent: s.download_percent }),
-  starting: (s) => {
-    if (isRollback(s)) return t("phase.rollback");
-    return startingSince && Date.now() - startingSince > SLOW_START_MS
-      ? t("phase.building")
-      : t("phase.starting");
-  },
-};
-
-// `lastTarget` - то, что разворачивается прямо сейчас (при откате оно меняется на
-// прежнюю голову), `clickedTarget` - то, что нажали: приговор нужен именно там.
-let lastTarget = null;
-let clickedTarget = null;
-let deployingSeries = false;
-let startingSince = 0;
-// Жалоба держится на карточке до следующей попытки: сервер уже через секунду отвечает
-// «готово» или «остановлено», и без этого текст ошибки исчезал бы раньше, чем прочтут.
-let cardError = null;
-
 function renderDeploying(status) {
-  const active = deployBusy(status.status);
-  const target = active ? status.deploying || null : null;
-  if (status.status !== "starting" || target !== lastTarget) startingSince = 0;
-  if (status.status === "starting" && !startingSince) startingSince = Date.now();
-  if (active) {
-    if (!deployingSeries) clickedTarget = target;
-    deployingSeries = true;
-    lastTarget = target;
-    cardError = null;
-  } else {
-    deployingSeries = false;
-    if (status.status === "error" && lastTarget) {
-      cardError = { id: lastTarget, text: detailText(status) || t("deploy.failed") };
-    } else if (status.status === "ready" && clickedTarget && isRollback(status)) {
-      // Откат кончается зелёным `ready` на другой голове, и без этой ветки о неудаче
-      // говорила бы только пилюля наверху - ровно то, что мы и убирали.
-      cardError = { id: clickedTarget, text: detailText(status) };
-    }
-  }
-
-  state.heads.forEach((entry, id) => {
-    const isTarget = active && id === target;
-    const failed = cardError !== null && cardError.id === id;
-    entry.button.classList.toggle("hidden", isTarget);
-    entry.button.disabled = active;
-    entry.button.textContent = failed ? t("head.retry") : headButtonLabel(entry.head);
-    entry.progress.classList.toggle("hidden", !isTarget);
-    entry.error.classList.toggle("hidden", !failed);
-    if (failed) entry.error.textContent = cardError.text;
-    if (!isTarget) return;
-    const percent = status.status === "downloading" ? status.download_percent : null;
-    const unknown = percent === null || percent === undefined;
-    entry.progress.dataset.indeterminate = String(unknown);
-    entry.progress.style.setProperty("--pct", (unknown ? 0 : percent) + "%");
-    entry.progress.querySelector(".head-progress-text").textContent = PHASE_WORDS[status.status](status);
-    entry.progress.title = status.detail || "";
-  });
+  const busy = deployBusy(status.status), progress = $("deploy-progress");
+  $("config-editor").disabled = !state.hydrated || !status.defaults;
+  $("btn-deploy").disabled = !status.defaults || !state.heads.has(state.selected) || busy || deployPending;
+  $("btn-deploy-env").disabled = busy || deployPending;
+  $("btn-deploy").textContent = t(state.selected && state.selected === status.engine?.variant ? "head.redeploy" : "head.deploy");
+  $("draft-note").textContent = state.configDirty ? t("settings.draft") : "";
+  if (status.status === "ready" && clickedTarget && isRollback(status)) rollbackStatus = status;
+  const phase = busy ? detailText(status) : "";
+  const pct = status.status === "downloading" && Number.isFinite(status.download_percent) ? status.download_percent : null;
+  progress.hidden = pct === null;
+  if (pct !== null) progress.value = pct;
+  const label = deployPending ? t("settings.wait") : busy ? [phase, status.deploying, pct !== null ? pct + "%" : ""].filter(Boolean).join(" · ")
+    : deployError?.message || (rollbackStatus ? detailText(rollbackStatus) : clickedTarget && status.status ? detailText(status) : "");
+  if ($("deploy-feedback").textContent !== label) $("deploy-feedback").textContent = label;
 }
-
-function tag(text, on) {
-  const span = document.createElement("span");
-  if (on) span.className = "on";
-  span.textContent = text;
-  return span;
-}
-
 async function deploy(variant) {
-  // Карточка отвечает до первого события с сервера: между нажатием и SSE проходит
-  // заметная доля секунды, и молчание в этот момент читается как «кнопка не сработала».
-  clickedTarget = variant;
-  renderDeploying({ status: "downloading", deploying: variant, download_percent: null, detail: "" });
-  // Пустое или нечисловое поле силы подсказки — не ноль: Number("") дал бы 0, то есть
-  // «подсказка выключена», чего пользователь не просил. undefined исчезает из JSON, и
-  // сервер берёт значение из своих defaults.
-  const boost = parseFloat($("opt-boost").value);
-  try {
-    await api("/api/deploy", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        variant: variant,
-        punctuation: $("opt-punctuation").value,
-        itn: $("opt-itn").value,
-        vad: $("opt-vad").value === "true",
-        pool_size: Number($("opt-pool").value),
-        hotwords_default: $("opt-hotwords-default").value === "true",
-        hotwords_boost: Number.isFinite(boost) ? boost : undefined,
-        file_window_concurrency: Number($("opt-window-concurrency").value),
-      }),
-    });
-  } catch (err) {
-    // 401 или 422 - ответ про эту голову, поэтому и показывается на её карточке.
-    $("state-detail").textContent = err.message;
-    cardError = { id: variant, text: err.message };
-    await refreshStatus();
-    return;
-  }
-  // Дальше карточку ведут SSE и опрос статуса: другая голова - другой словарь, но
-  // пересчитывать его до готовности движка нечем.
-  await refreshStatus();
+  if (deployPending || deployBusy(state.status?.status)) return;
+  clickedTarget = variant; deployError = ""; rollbackStatus = null; deployPending = true;
+  renderDeploying(state.status || {});
+  try { await api("/api/deploy", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({...draftConfig(), variant})}); }
+  catch (err) { deployError = err; }
+  finally { await refreshStatus(); deployPending = false; renderDeploying(state.status || {}); }
 }
 
+let stopPending = false, stopError = null;
+function canStop(status) {
+  return !!status?.engine?.running && ["ready", "error"].includes(status.status);
+}
+function renderStop() {
+  const button = $("btn-stop");
+  button.classList.toggle("hidden", !canStop(state.status));
+  button.disabled = stopPending || !canStop(state.status);
+  setText("stop-feedback", stopError ? t("status.stopFailed", {reason:stopError.message}) : "");
+}
 async function stopEngine() {
+  if (stopPending || !canStop(state.status)) return;
+  stopPending = true; renderStop();
   try {
     await api("/api/stop", { method: "POST" });
+    stopError = null;
   } catch (err) {
-    $("state-detail").textContent = err.message;
+    stopError = err instanceof LocalizedError ? err : err.status
+      ? new LocalizedError("api.error", {status:err.status}) : new LocalizedError("status.stopConnection");
+  } finally {
+    await refreshStatus(); stopPending = false; renderStop();
   }
-  await refreshStatus();
   await loadHeads();
 }
 
@@ -444,22 +401,36 @@ async function stopEngine() {
    ту, что словарь развёрнутой головы написать не может, движок молча выбросит, и она
    показана зачёркнутой. Отдельного списка отброшенных больше нет — он и есть список. */
 
-const glossary = { entries: [], applied: "", dropped: new Set(), envMissing: [], issues: [] };
+const glossary = { loaded:false, saving:false, request:0, payload:null, entries: [], applied: "", dropped: new Set(), envMissing: [], issues: [] };
+
+function setGlossaryHint(render) {
+  glossary.hint = render;
+  setText("glossary-hint", render ? render() : "");
+}
 
 const fold = (phrase) => phrase.toLowerCase().replace(/ё/g, "е");
 
-async function loadGlossary(keepEdits) {
+async function loadGlossary(keepEdits = true) {
+  const request = ++glossary.request;
   try {
     const payload = await api("/api/glossary");
+    if (request !== glossary.request) return false;
+    const dirty = glossary.loaded && glossaryText() !== glossary.applied;
+    const entries = parseGlossary(payload.text);
+    if (!dirty || !keepEdits) glossary.entries = entries;
+    glossary.applied = entryText(entries);
+    glossary.payload = payload; glossary.loaded = true;
     glossary.dropped = new Set((payload.dropped || []).map(fold));
     glossary.issues = payload.issues || [];
-    if (!keepEdits) {
-      glossary.entries = parseGlossary(payload.text);
-      glossary.applied = glossaryText();
-    }
+    $("glossary-retry").hidden = true;
     renderGlossary(payload);
+    return true;
   } catch (err) {
-    /* не критично для остальной страницы */
+    if (request === glossary.request) {
+      setGlossaryHint(() => err.message);
+      $("glossary-retry").hidden = false;
+    }
+    return false;
   }
 }
 
@@ -475,8 +446,9 @@ function parseGlossary(text) {
     .filter((entry) => entry.phrase);
 }
 
-function glossaryText() {
-  return glossary.entries
+const glossaryText = () => entryText(glossary.entries);
+function entryText(entries) {
+  return entries
     .map((entry) => (entry.weight ? entry.phrase + "|" + entry.weight : entry.phrase))
     .join("\n");
 }
@@ -487,8 +459,9 @@ function renderGlossary(payload) {
   glossary.entries.forEach((entry, index) => list.appendChild(tagChip(entry, index)));
 
   $("glossary-count").textContent = phraseCount(glossary.entries.length);
-  $("btn-glossary").disabled = glossaryText() === glossary.applied;
-  renderReach(payload);
+  $("glossary-editor").disabled = !glossary.loaded || glossary.saving;
+  $("btn-glossary").disabled = !glossary.loaded || glossary.saving || glossaryText() === glossary.applied;
+  renderReach(payload || glossary.payload);
   renderIssues();
   renderEnvMissing(payload);
 }
@@ -568,7 +541,10 @@ function tagChip(entry, index) {
   remove.className = "tag-remove";
   remove.textContent = "×";
   remove.setAttribute("aria-label", t("glossary.remove", { phrase: entry.phrase }));
-  remove.addEventListener("click", () => removePhrase(index));
+  remove.addEventListener("click", () => {
+    removePhrase(index);
+    ($("tag-list").children[Math.min(index,glossary.entries.length-1)]?.querySelector("button") || $("add-phrase")).focus();
+  });
   chip.appendChild(remove);
   return chip;
 }
@@ -582,6 +558,9 @@ function renderReach(payload) {
     ? t("glossary.headNamed", { variant: payload.variant })
     : t("glossary.headAny");
 
+  if (glossaryText() !== glossary.applied) {
+    reach.textContent = t("glossary.staged"); hint.textContent = ""; return;
+  }
   if (!total) {
     reach.textContent = "";
     hint.textContent = "";
@@ -633,11 +612,10 @@ function addPhrases(raw) {
   });
 
   renderGlossary(null);
-  loadGlossary(true);
   if (added.length) {
-    $("glossary-hint").textContent = t("glossary.added");
+    setGlossaryHint(() => t("glossary.added"));
   } else if (duplicate !== null) {
-    $("glossary-hint").textContent = t("glossary.duplicate");
+    setGlossaryHint(() => t("glossary.duplicate"));
     flashChip(duplicate);
   }
   return added.length;
@@ -646,7 +624,7 @@ function addPhrases(raw) {
 function flashChip(index) {
   const chip = $("tag-list").querySelector('[data-index="' + index + '"]');
   if (!chip) return;
-  chip.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  chip.scrollIntoView({ block: "nearest", behavior: "instant" });
   chip.dataset.flash = "true";
   setTimeout(() => delete chip.dataset.flash, 900);
 }
@@ -654,8 +632,7 @@ function flashChip(index) {
 function removePhrase(index) {
   glossary.entries.splice(index, 1);
   renderGlossary(null);
-  loadGlossary(true);
-  $("glossary-hint").textContent = t("glossary.removed");
+  setGlossaryHint(() => t("glossary.removed"));
 }
 
 function commitInput() {
@@ -669,19 +646,19 @@ function commitInput() {
 
 /* Форматирование берёт на себя сервер: разберёт запятые, веса после вертикальной
    черты и повторы, а вернёт канонический вид, которым мы и заменяем свой список. */
-async function sendGlossary(text, note) {
-  const hint = $("glossary-hint");
-  hint.textContent = t("glossary.applying");
+async function sendGlossary(text) {
+  if (!glossary.loaded || glossary.saving) return;
+  glossary.saving = true; ++glossary.request; renderGlossary(glossary.payload);
+  setGlossaryHint(() => t("glossary.applying"));
   try {
     const payload = await api("/api/glossary", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
     });
-    hint.textContent = payload.applied
-      ? note || t("glossary.applied")
-      : t("glossary.applyFailed");
-    await loadGlossary();
+    const key = !payload.applied ? "glossary.applyFailed" : state.status?.engine?.running ? "glossary.applied" : "glossary.stored";
+    setGlossaryHint(() => t(key));
+    await loadGlossary(false);
     // Ответ на правку знает о ней больше, чем последующее чтение файла: файл не
     // хранит ни неразобранный вес, ни табуляцию. Поэтому список претензий из
     // POST сильнее того, что вернул GET, и перекрывает его.
@@ -691,9 +668,9 @@ async function sendGlossary(text, note) {
     }
     return payload.count;
   } catch (err) {
-    hint.textContent = err.message;
+    setGlossaryHint(() => err.message);
     return null;
-  }
+  } finally { glossary.saving = false; renderGlossary(glossary.payload); }
 }
 
 function applyGlossary() {
@@ -704,20 +681,21 @@ function applyGlossary() {
    список одним неверным файлом было бы обидно. */
 async function importGlossary(file) {
   const before = glossary.entries.length;
-  const added = addPhrases(await file.text());
-  const skipped = parseGlossary(await file.text()).length - added;
-  $("glossary-hint").textContent = added
+  const raw = await file.text();
+  const added = addPhrases(raw);
+  const skipped = parseGlossary(raw).length - added;
+  setGlossaryHint(() => added
     ? t("glossary.imported", {
         added,
         skipped: skipped ? t("glossary.importedSkipped", { count: skipped }) : "",
       })
-    : t("glossary.importedNothing");
+    : t("glossary.importedNothing"));
   return glossary.entries.length - before;
 }
 
 function exportGlossary() {
   if (!glossary.entries.length) {
-    $("glossary-hint").textContent = t("glossary.empty");
+    setGlossaryHint(() => t("glossary.empty"));
     return;
   }
   const url = URL.createObjectURL(
@@ -728,27 +706,55 @@ function exportGlossary() {
   link.download = t("glossary.exportName");
   link.click();
   URL.revokeObjectURL(url);
-  $("glossary-hint").textContent = t("glossary.saved");
+  setGlossaryHint(() => t("glossary.saved"));
 }
 
 /* ----------------------------------------------------------------- проверка */
 
+const audio = {mode:"mic", file:null, pending:false, starting:false, generation:0, micError:"", result:null, message:"audio.empty", error:""};
+const motion = matchMedia("(prefers-reduced-motion: reduce)");
+const micAvailable = () => window.isSecureContext && !!navigator.mediaDevices?.getUserMedia;
+function renderAudio() {
+  const mic = audio.mode === "mic", rec = !!state.recording, ready = state.status?.status === "ready";
+  const busy = audio.starting || audio.pending;
+  $("mic-mode").setAttribute("aria-pressed", mic); $("file-mode").setAttribute("aria-pressed", !mic);
+  $("file-mode").disabled = rec || audio.starting;
+  $("btn-record").hidden = !mic; $("file-actions").hidden = mic;
+  $("btn-record").disabled = busy || (!rec && (!ready || !micAvailable()));
+  $("btn-record").textContent = t(rec ? "btn.recordStop" : "audio.record");
+  $("btn-send").disabled = !audio.file || !ready || busy;
+  $("file-input").disabled = rec || audio.starting;
+  setText("source-title", t(mic ? (rec ? "audio.recording" : "audio.mic") : "audio.file"));
+  const sourceState = mic ? audio.micError?.message || (rec ? t("audio.live") : audio.starting ? t("audio.permission") : !micAvailable() ? t("mic.blockedTitle") : null) : audio.file?.name;
+  const serviceState = !state.status ? state.statusError?.message || t("audio.awaitStatus") : !ready ? t("audio.notReady", {state:stateWord(state.status.status)}) : "";
+  setText("source-state", [sourceState || (!serviceState ? t(mic ? "audio.idle" : "audio.pick") : ""), serviceState].filter(Boolean).join(" · "));
+  $("drop").querySelector(".face").dataset.running = rec;
+  $("meter").hidden = !rec || motion.matches; $("idlepoint").hidden = rec && !motion.matches;
+  const result = audio.result;
+  setText("result-text", result ? result.text || t("test.empty") : audio.error?.message || t(audio.message));
+  $("result-text").classList.toggle("empty", !result?.text);
+  $("result").hidden = !result;
+  document.querySelector('[data-target="result-text"]').hidden = !result?.text;
+  renderLatency(result);
+}
+function resetAudioResult() {
+  audio.controller?.abort(); audio.controller = null; audio.pending = false;
+  audio.result = null; audio.message = "audio.empty"; audio.error = "";
+  document.querySelector("[data-page=dict] .manual")?.remove();
+}
 async function sendAudio(blob, filename) {
-  const result = $("result");
-  const text = $("result-text");
-  result.classList.remove("hidden");
-  text.textContent = t("test.recognizing");
-  const form = new FormData();
-  form.append("file", blob, filename);
+  if (audio.pending || !blob || state.status?.status !== "ready") return;
+  resetAudioResult();
+  const controller = new AbortController(); audio.controller = controller;
+  audio.pending = true; audio.message = "test.recognizing"; renderAudio();
+  const form = new FormData(); form.append("file", blob, filename);
   try {
-    const payload = await api("/api/test", { method: "POST", body: form });
-    text.textContent = payload.text || t("test.empty");
-    renderLatency(payload);
-  } catch (err) {
-    text.textContent = err.message;
-    renderLatency(null);
+    const result = await api("/api/test", {method:"POST", body:form, signal:controller.signal});
+    if (audio.controller === controller) audio.result = result;
+  } catch (err) { if (audio.controller === controller) audio.error = err; }
+  finally {
+    if (audio.controller === controller) { audio.pending = false; audio.controller = null; renderAudio(); refreshStatus(); }
   }
-  refreshStatus();
 }
 
 function renderLatency(payload) {
@@ -775,6 +781,7 @@ function renderLatency(payload) {
     verdict.dataset.slow = "false";
     return;
   }
+  if (!work) { verdict.textContent = ""; return; }
   const ratio = audio / work;
   verdict.dataset.slow = String(ratio < 1);
   verdict.textContent = ratio >= 1
@@ -797,64 +804,64 @@ class Capture extends AudioWorkletProcessor {
 registerProcessor('capture', Capture);
 `;
 
-async function startRecording() {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-  });
-  const Ctx = window.AudioContext || window.webkitAudioContext;
-  const ctx = new Ctx({ sampleRate: TARGET_RATE });
-  const source = ctx.createMediaStreamSource(stream);
-  const chunks = [];
-  const levels = [];
-
-  const onChunk = (data) => {
-    chunks.push(data);
-    let peak = 0;
-    for (let i = 0; i < data.length; i += 1) peak = Math.max(peak, Math.abs(data[i]));
-    levels.push(peak);
-    if (levels.length > 120) levels.shift();
-    drawMeter(levels);
-  };
-
-  let node;
-  if (ctx.audioWorklet) {
-    const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: "application/javascript" }));
-    await ctx.audioWorklet.addModule(url);
-    URL.revokeObjectURL(url);
-    node = new AudioWorkletNode(ctx, "capture");
-    node.port.onmessage = (event) => onChunk(event.data);
-  } else {
-    node = ctx.createScriptProcessor(2048, 1, 1);
-    node.onaudioprocess = (event) => onChunk(new Float32Array(event.inputBuffer.getChannelData(0)));
+async function startRecording(generation) {
+  const stream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1, echoCancellation:true, noiseSuppression:true}});
+  let ctx;
+  try {
+    if (generation !== audio.generation) return;
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    ctx = new Ctx({sampleRate:TARGET_RATE});
+    const source = ctx.createMediaStreamSource(stream), chunks = [], levels = [];
+    let frame = 0;
+    const onChunk = data => {
+      if (generation !== audio.generation) return;
+      chunks.push(data);
+      if (motion.matches) return;
+      let peak = 0;
+      for (let i = 0; i < data.length; i++) peak = Math.max(peak, Math.abs(data[i]));
+      levels.push(peak); if (levels.length > 120) levels.shift();
+      if (!frame) frame = requestAnimationFrame(() => {frame = 0; if (generation === audio.generation) drawMeter(levels);});
+    };
+    let node;
+    if (ctx.audioWorklet) {
+      const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], {type:"application/javascript"}));
+      try { await ctx.audioWorklet.addModule(url); } finally { URL.revokeObjectURL(url); }
+      node = new AudioWorkletNode(ctx, "capture");
+      node.port.onmessage = e => onChunk(e.data);
+    } else {
+      node = ctx.createScriptProcessor(2048, 1, 1);
+      node.onaudioprocess = e => onChunk(new Float32Array(e.inputBuffer.getChannelData(0)));
+    }
+    await ctx.resume();
+    if (generation !== audio.generation) return;
+    source.connect(node); node.connect(ctx.destination);
+    state.recording = {stream, ctx, node, source, chunks};
+  } finally {
+    if (state.recording?.stream !== stream) {
+      stream.getTracks().forEach(track => track.stop());
+      if (ctx && ctx.state !== "closed") await ctx.close();
+    }
   }
-  source.connect(node);
-  if (!ctx.audioWorklet) node.connect(ctx.destination);
-
-  $("meter").classList.remove("hidden");
-  state.recording = { stream, ctx, node, source, chunks };
 }
 
-async function stopRecording() {
-  const rec = state.recording;
-  state.recording = null;
+async function stopRecording(submit = true) {
+  ++audio.generation;
+  const rec = state.recording; state.recording = null; audio.starting = false;
   if (!rec) return;
-  rec.source.disconnect();
-  rec.node.disconnect();
-  rec.stream.getTracks().forEach((track) => track.stop());
+  rec.source.disconnect(); rec.node.disconnect(); rec.node.port?.close();
+  rec.stream.getTracks().forEach(track => track.stop());
   const rate = rec.ctx.sampleRate;
-  await rec.ctx.close();
-  drawMeter([]);
-  $("meter").classList.add("hidden");
-
-  const samples = concat(rec.chunks);
-  if (samples.length < rate * 0.25) {
-    $("result").classList.remove("hidden");
-    $("result-text").textContent = t("test.tooShort");
-    renderLatency(null);
-    return;
+  const closing = rec.ctx.close();
+  drawMeter([]); renderAudio();
+  if (submit) {
+    const samples = concat(rec.chunks);
+    if (samples.length < rate * 0.25) {
+      audio.result = null; audio.error = ""; audio.message = "test.tooShort"; renderAudio();
+    } else if (state.status?.status === "ready") {
+      sendAudio(encodeWav(resample(samples, rate, TARGET_RATE), TARGET_RATE), t("snippet.file"));
+    } else { audio.result = null; audio.error = ""; audio.message = "audio.notSent"; renderAudio(); }
   }
-  const wav = encodeWav(resample(samples, rate, TARGET_RATE), TARGET_RATE);
-  sendAudio(wav, t("snippet.file"));
+  await closing;
 }
 
 function concat(chunks) {
@@ -912,8 +919,7 @@ function drawMeter(levels) {
   const width = canvas.width;
   const height = canvas.height;
   ctx.clearRect(0, 0, width, height);
-  const styles = getComputedStyle(document.body);
-  ctx.fillStyle = styles.getPropertyValue("--amber").trim() || "#e8a33d";
+  ctx.fillStyle = "#e5e7e4";
   const barWidth = 3;
   const gap = 1;
   const count = Math.floor(width / (barWidth + gap));
@@ -925,45 +931,70 @@ function drawMeter(levels) {
 }
 
 async function toggleRecording() {
-  const button = $("btn-record");
-  if (state.recording) {
-    button.textContent = t("btn.record");
-    button.classList.remove("btn-record-active");
-    await stopRecording();
-    return;
-  }
-  try {
-    await startRecording();
-    button.textContent = t("btn.recordStop");
-    button.classList.add("btn-record-active");
-  } catch (err) {
-    $("result").classList.remove("hidden");
-    $("result-text").textContent = t("mic.error", { message: err.message });
-  }
+  if (state.recording) { await stopRecording(); return; }
+  if (audio.starting) return;
+  resetAudioResult(); audio.starting = true; audio.micError = "";
+  const generation = ++audio.generation; renderAudio();
+  try { await startRecording(generation); }
+  catch (err) { if (audio.generation === generation) audio.micError = new LocalizedError("mic.error", {message:err.message}); }
+  finally { if (audio.generation === generation) { audio.starting = false; renderAudio(); } }
 }
 
 /* --------------------------------------------------------------- сниппеты */
 
+function exampleOrigin() {
+  const raw = $("example-origin").value.trim();
+  if (!/^https?:\/\/[^\s/@?#\\]+\/?$/i.test(raw)) return null;
+  try {
+    const url = new URL(raw);
+    return /^[a-z\d.:[\]_-]+$/i.test(url.host) ? url.origin : null;
+  } catch { return null; }
+}
 function renderSnippets() {
-  const origin = window.location.origin;
-  const auth = state.key ? ' \\\n  -H "Authorization: Bearer ' + state.key + '"' : "";
-  const sample = t("snippet.file");
-  $("snip-curl").textContent =
-    "curl -X POST " + origin + "/v1/audio/transcriptions" + auth + " \\\n" +
-    "  -F model=whisper-1 \\\n" +
-    "  -F file=@" + sample;
-  $("snip-py").textContent =
-    "from openai import OpenAI\n\n" +
-    'client = OpenAI(base_url="' + origin + '/v1", api_key="' +
-      (state.key || t("snippet.noKey")) + '")\n' +
-    'with open("' + sample + '", "rb") as audio:\n' +
-    "    result = client.audio.transcriptions.create(model=\"whisper-1\", file=audio)\n" +
-    "print(result.text)";
-  $("snip-models").textContent = "curl " + origin + "/v1/models" + auth;
-  // Документацию открывает браузер, а заголовок он поставить не умеет: ключ идет
-  // в строке запроса - тем же способом, что и у SSE на /api/events.
-  const docs = $("link-docs");
-  if (docs) docs.href = state.key ? "/api/docs?api_key=" + encodeURIComponent(state.key) : "/api/docs";
+  const origin = exampleOrigin(), auth = $("example-key").checked;
+  const file = t("snippet.file"), sep = " \\\n  ";
+  const bearer = auth ? [ '-H "Authorization: Bearer $STT_API_KEY"' ] : [];
+  $("example-origin").setAttribute("aria-invalid", String(!origin));
+  $("address-error").textContent = origin ? "" : t("api.invalid");
+  $("base-url").textContent = origin ? origin + "/v1" : "—";
+  $("snip-curl").textContent = origin ? [`curl -X POST '${origin}/v1/audio/transcriptions'`, ...bearer, "-F 'model=whisper-1'", `-F 'file=@${file}'`].join(sep) : "—";
+  $("snip-models").textContent = origin ? [`curl '${origin}/v1/models'`, ...bearer].join(sep) : "—";
+  $("snip-py").textContent = origin ? (auth ? "import os\n" : "") + "from openai import OpenAI\n\n" +
+    `client = OpenAI(base_url="${origin}/v1", api_key=${auth ? 'os.environ["STT_API_KEY"]' : '"not-needed"'})\n` +
+    `with open("${file}", "rb") as audio:\n    result = client.audio.transcriptions.create(model="whisper-1", file=audio)\nprint(result.text)` : "—";
+  document.querySelectorAll('[data-page="api"] .copy').forEach(b => b.disabled = !origin);
+  $("link-docs").href = state.key ? "/api/docs?api_key=" + encodeURIComponent(state.key) : "/api/docs";
+}
+let modelsRequest = 0;
+async function readServiceModels() {
+  const request = ++modelsRequest, box = $("service-models");
+  if (!box.open) { setText("model-response", ""); return; }
+  setText("model-response", t("state.loading"));
+  try {
+    const result = await api("/v1/models");
+    if (request === modelsRequest && box.open) setText("model-response", JSON.stringify(result, null, 2));
+  } catch (err) {
+    if (request === modelsRequest && box.open) setText("model-response", err.message);
+  }
+}
+let toastTimer;
+function toast(text) {
+  clearTimeout(toastTimer); $("live").textContent = text;
+  toastTimer = setTimeout(() => { $("live").textContent = ""; }, 2800);
+}
+async function copyText(button) {
+  const target = $(button.dataset.target), text = target.textContent, owner = page;
+  if (!text || button.disabled) return;
+  document.querySelector(".manual")?.remove();
+  try {
+    await navigator.clipboard.writeText(text);
+    if (owner === page) toast(t("btn.copied"));
+  } catch {
+    if (owner !== page || !button.isConnected || target.textContent !== text) return;
+    const box = el("label", t("copy.manual"), "field manual"), area = el("textarea");
+    area.readOnly = true; area.rows = 3; area.value = text; box.append(area);
+    button.parentElement.after(box); area.focus(); area.select();
+  }
 }
 
 /* ------------------------------------------------------------------ язык */
@@ -1003,39 +1034,59 @@ function renderRichTexts() {
   rich($("glossary-intro"), "glossary.intro", {});
   rich($("connect-intro"), "connect.intro", { prompt: code("prompt") });
 
-  // Ссылка на схему живёт в разметке и переносится в новый абзац как есть:
-  // renderSnippets подставляет в неё ключ и должен находить её по id всегда.
-  const link = $("link-docs") || document.createElement("a");
-  link.id = "link-docs";
-  link.target = "_blank";
-  link.rel = "noreferrer";
-  link.textContent = t("connect.swagger");
-  rich($("connect-docs"), "connect.docs", {
-    link,
-    models: code("GET /v1/models"),
-    model: code("model"),
-  });
 }
 
-/* Переключение языка перерисовывает страницу на месте: перезагрузка сбросила бы
-   несохранённые правки глоссария и обнулила бы ленту логов. Карточки голов
-   выбрасываются намеренно - их подписи приходят с сервера на другом языке. */
+const pageNames = Array.from(document.querySelectorAll("[data-page]"), n => n.dataset.page);
+let page = null;
+function showPage(focus = false) {
+  const requested = location.hash.slice(1), next = pageNames.includes(requested) ? requested : "dict";
+  if (page === "dict" && next !== page && (state.recording || audio.starting)) stopRecording(false);
+  if (page === "compare" && next !== page) cancelComparison();
+  if (next !== page) document.querySelector(".manual")?.remove();
+  const changed = next !== page; page = next;
+  for (const node of document.querySelectorAll("[data-page]")) node.hidden = node.dataset.page !== page;
+  for (const link of document.querySelectorAll("#railnav a")) {
+    if (link.hash === "#" + page) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current");
+  }
+  $("mobile-nav").value = page; $("heading").textContent = t("page." + page); $("intro").textContent = t("intro." + page);
+  document.title = t("page." + page) + " — " + t("brand.name");
+  if (focus) { $("main").focus({preventScroll:true}); window.scrollTo(0,0); }
+  if (changed && page === "journal") loadJournal();
+  if (changed && (page === "models" || page === "compare")) loadHeads();
+  if (changed && page === "glossary" && !glossary.saving) loadGlossary();
+}
+function options(id, entries) {
+  const select = $(id), previous = select.value;
+  select.replaceChildren(...entries.map(([value, label]) => new Option(label, value)));
+  if (entries.some(([value]) => value === previous)) select.value = previous;
+}
+function localizedOptions() {
+  options("mobile-nav", pageNames.map(k => [k,t("page." + k)]));
+  for (const id of ["opt-punctuation","opt-itn"]) options(id,["auto","on","off"].map(v=>[v,t("mode."+v)]));
+  options("opt-vad", [["false",t("vad.off")],["true",t("vad.on")]]);
+  options("opt-hotwords-default", [["true",t("dict.on")],["false",t("dict.off")]]);
+  for (const [id,key] of [["opt-pool","pool"],["opt-window-concurrency","window"]]) {
+    const vals = Array.from({length:8},(_,i)=>String(i+1));
+    options(id, vals.map(v => { const k = `${key}.${v}`; return [v,t(k) === k ? v : t(k)]; }));
+  }
+  for (const [id, keys] of [["category",["deploy","engine"]],["level",["info","warning","error"]],["period",["hour","day"]]]) {
+    options("journal-" + id, ["all",...keys].map(v=>[v,t("journal."+v)]));
+  }
+}
+function localize() {
+  applyStaticTexts(); localizedOptions(); renderRichTexts(); renderSnippets(); markLangButtons();
+  showPage(); renderAudio(); renderGlossary(glossary.payload); renderJournal(); renderCompare(true);
+  if (state.status) renderStatus(state.status);
+  else if (state.statusError) { renderStop(); setText("state-detail", state.statusError.message); setText("state-label", t("state.offline")); }
+}
 function switchLang(next) {
   if (!setLang(next)) return;
-  applyStaticTexts();
-  renderRichTexts();
-  renderSnippets();
-  markLangButtons();
-  state.heads.clear();
-  $("heads").textContent = "";
-  loadHeads();
-  if (state.status) renderStatus(state.status);
-  renderGlossary(null);
-  loadGlossary(true);
+  document.querySelector(".manual")?.remove();
+  localize(); setGlossaryHint(glossary.hint); loadHeads();
 }
 
 function markLangButtons() {
-  document.querySelectorAll("#lang .lang-option").forEach((button) => {
+  document.querySelectorAll(".lang-option").forEach((button) => {
     const on = button.dataset.lang === currentLang();
     button.setAttribute("aria-pressed", String(on));
     button.classList.toggle("on", on);
@@ -1052,9 +1103,12 @@ function appendLog(line) {
   if ($("log-follow").checked) logs.scrollTop = logs.scrollHeight;
 }
 
+let eventSource, reconnectTimer;
 function connectEvents() {
+  clearTimeout(reconnectTimer); eventSource?.close();
   const query = state.key ? "?api_key=" + encodeURIComponent(state.key) : "";
   const source = new EventSource("/api/events" + query);
+  eventSource = source;
   source.onmessage = (event) => {
     let payload;
     try {
@@ -1067,6 +1121,7 @@ function connectEvents() {
       return;
     }
     if (payload.type === "snapshot") {
+      $("logs").textContent = "";
       renderStatus(payload);
       loadHeads();
       return;
@@ -1088,97 +1143,206 @@ function connectEvents() {
   };
   source.onerror = () => {
     source.close();
-    setTimeout(connectEvents, 3000);
+    reconnectTimer = setTimeout(connectEvents, 3000);
   };
+}
+
+/* --------------------------------------------- структурированный журнал */
+const journal = {events:null, error:"", loading:false};
+async function loadJournal() {
+  if (journal.loading) return;
+  journal.loading = true;
+  try {
+    const payload = await api("/api/journal");
+    journal.events = payload.events; journal.error = "";
+  } catch (err) { journal.error = err; }
+  finally { journal.loading = false; renderJournal(); }
+}
+function renderJournal() {
+  const kind = $("journal-category").value, level = $("journal-level").value, period = $("journal-period").value;
+  const after = period === "hour" ? Date.now() - 3600000 : period === "day" ? Date.now() - 86400000 : 0;
+  const events = (journal.events || []).filter(e => (kind === "all" || kind === e.category) &&
+    (level === "all" || level === e.level) && Date.parse(e.at) >= after);
+  $("journal-note").textContent = journal.error?.message || (!journal.events ? t("state.loading") : !events.length ? t("journal.empty") : "");
+  const fmt = new Intl.DateTimeFormat(currentLang(),{dateStyle:"short", timeStyle:"medium"});
+  const rows = events.map(event => {
+    const li = el("li", null, "logrow"), time = el("time", fmt.format(new Date(event.at))), body = el("div");
+    time.dateTime = event.at; li.dataset.level = event.level;
+    const p = event.params || {}, key = "event." + event.code;
+    const message = t(key, {...p, kind:t("reason."+(p.kind || "other")), variant:p.variant || "—"});
+    body.append(el("span",t("journal."+event.category)+" · "+t("journal."+event.level),"logmeta"), el("span",message === key ? event.code : message));
+    if (event.code === "download.failed" && p.running) body.append(el("span",t("event.previous",p),"logmeta"));
+    li.append(time,body); return li;
+  });
+  $("journal-events").replaceChildren(...rows);
+}
+
+/* ------------------------------------------------------- сравнение моделей */
+const compare = {busy:false, signature:null, payload:null, error:""};
+function renderCompare(force = false) {
+  const downloaded = [...state.heads.values()].map(item => item.head).filter(head => head.downloaded);
+  const enabled = state.status?.compare_enabled === true, changing = deployBusy(state.status?.status);
+  const available = enabled && state.catalog === "ready" && downloaded.length >= 2 && !changing;
+  const message = !state.status ? "audio.awaitStatus" : !enabled ? "compare.disabled" : changing ? "compare.engineChanging"
+    : state.catalog === "loading" ? "compare.catalogLoading" : state.catalog === "error" ? "compare.catalogError"
+    : downloaded.length < 2 ? "compare.weights" : "compare.method";
+  setText("compare-availability", !state.status && state.statusError?.message || t(message));
+  $("compare-form").hidden = !available; $("compare-models").hidden = !["compare.catalogError","compare.weights"].includes(message);
+  const signature = downloaded.map(h=>h.id).join("|");
+  if (signature !== compare.signature) {
+    compare.signature = signature;
+    const entries = downloaded.map(h => [h.id,h.title]);
+    for (const id of ["model-a","model-b"]) options(id, entries);
+    if ($("model-a").value === $("model-b").value && downloaded.length > 1) {
+      $("model-b").value = downloaded.find(h => h.id !== $("model-a").value).id;
+    }
+  }
+  for (const id of ["model-a","model-b"]) { $(id).disabled = compare.busy; $(id).dataset.previous = $(id).value; }
+  const file = $("compare-file").files[0];
+  $("compare-name").textContent = file?.name || t("compare.noFile");
+  $("compare-pick-label").textContent = t(file ? "compare.change" : "btn.file");
+  $("compare-picker").classList.toggle("primary", !file);
+  $("btn-compare").hidden = !file;
+  $("compare-file").disabled = compare.busy; $("btn-compare").disabled = !available || compare.busy || !file;
+  if (!compare.payload) $("compare-stage").textContent = compare.busy ? t("compare.wait") : compare.error?.message || "";
+  if (force) showComparison();
+}
+
+/* Совпадающие слова, знаки и пробелы выравниваются по наибольшей общей подпоследовательности.
+   Для очень длинных расшифровок остаётся точный ответ о равенстве, без тяжёлой подсветки. */
+function diffTokens(textA, textB) {
+  const tokens = s => s.match(/[\p{L}\p{M}\p{N}]+|\s+|[^\s\p{L}\p{M}\p{N}]/gu) || [];
+  const a = tokens(textA), b = tokens(textB), n = a.length, m = b.length;
+  let start = 0, end = 0;
+  while (start < n && start < m && a[start] === b[start]) start++;
+  while (end < n-start && end < m-start && a[n-1-end] === b[m-1-end]) end++;
+  const rows = n-start-end, cols = m-start-end;
+  if ((rows+1)*(cols+1) > 1000000) return null;
+  const sameA = new Uint8Array(n), sameB = new Uint8Array(m);
+  for (const flags of [sameA,sameB]) {flags.fill(1,0,start); flags.fill(1,flags.length-end);}
+  const stride = cols+1, grid = new Uint32Array((rows+1)*stride);
+  for (let i=rows-1;i>=0;i--) for (let j=cols-1;j>=0;j--) {
+    const p = i*stride+j;
+    grid[p] = a[start+i] === b[start+j] ? 1+grid[p+stride+1] : Math.max(grid[p+stride],grid[p+1]);
+  }
+  let i=0,j=0;
+  while (i<rows && j<cols) {
+    if (a[start+i] === b[start+j]) {sameA[start+i++]=1; sameB[start+j++]=1;}
+    else if (grid[(i+1)*stride+j] >= grid[i*stride+j+1]) i++; else j++;
+  }
+  return [[a,sameA],[b,sameB]];
+}
+function showComparison() {
+  const box = $("compare-results"); box.replaceChildren();
+  const payload = compare.payload;
+  $("compare-time-note").hidden = !payload;
+  if (!payload) return;
+  const [a,b] = payload.results, same = a.text === b.text;
+  const diff = same ? null : diffTokens(a.text,b.text);
+  $("compare-stage").textContent = t(same ? "compare.same" : diff ? "compare.diff" : "compare.long") +
+    (Number.isFinite(payload.audio_seconds) ? " · " + t("compare.audio", {value:payload.audio_seconds.toFixed(2)}) : "");
+  payload.results.forEach((r,i) => {
+    const card = el("section",null,"panel stack"), text = el("p",null,"sample"), btn = el("button",t("btn.copy"),"copy");
+    text.id = "comparison-"+i; btn.type = "button"; btn.dataset.target = text.id; btn.disabled = !r.text;
+    if (!diff || !r.text) text.textContent = r.text || t("test.empty");
+    else {
+      const [tokens,flags] = diff[i];
+      for (let start=0;start<tokens.length;) {
+        let end = start+1; while (end<tokens.length && flags[start] === flags[end]) end++;
+        const value = tokens.slice(start,end).join(""); text.append(flags[start] ? document.createTextNode(value) : el("mark",value)); start=end;
+      }
+    }
+    card.append(el("span",t(i ? "compare.second" : "compare.first"),"small"),el("h2",state.heads.get(r.variant)?.head.title || r.variant),
+      code(r.variant), text, el("p",t("compare.elapsed",{value:r.elapsed.toFixed(2)}),"help"),btn); box.append(card);
+  });
+}
+function cancelComparison() {
+  if (!compare.controller) return;
+  compare.controller.abort(); compare.controller = null; compare.busy = false;
+  compare.error = ""; compare.payload = null; renderCompare(true);
+}
+async function runCompare(event) {
+  event.preventDefault(); if ($("btn-compare").disabled) return;
+  const file = $("compare-file").files[0], form = new FormData();
+  form.append("file",file,file.name); form.append("variant_a",$("model-a").value); form.append("variant_b",$("model-b").value);
+  const controller = new AbortController(); compare.controller = controller;
+  compare.busy = true; compare.payload = null; compare.error = ""; renderCompare(true);
+  try {
+    const result = await api("/api/compare",{method:"POST",body:form,signal:controller.signal});
+    if (compare.controller === controller) compare.payload = result;
+  } catch (err) { if (compare.controller === controller) {compare.error = err; loadHeads();} }
+  finally { if (compare.controller === controller) { compare.controller = null; compare.busy = false; renderCompare(true); } }
 }
 
 /* -------------------------------------------------------------------- init */
 
-function bindDropZone() {
+function bindAudio() {
+  for (const mode of ["mic","file"]) $(mode+"-mode").onclick = () => {
+    if (mode !== audio.mode) { resetAudioResult(); audio.mode = mode; renderAudio(); }
+  };
+  $("btn-record").onclick = toggleRecording; motion.addEventListener("change", renderAudio);
+  const chooseFile = file => { if (!file || state.recording || audio.starting) return; resetAudioResult(); audio.file=file; audio.mode="file"; renderAudio(); };
+  $("file-input").onchange = e => chooseFile(e.target.files[0]);
+  $("btn-send").onclick = () => sendAudio(audio.file, audio.file?.name);
   const drop = $("drop");
-  ["dragenter", "dragover"].forEach((name) =>
-    drop.addEventListener(name, (event) => {
-      event.preventDefault();
-      drop.classList.add("over");
-    }));
-  ["dragleave", "drop"].forEach((name) =>
-    drop.addEventListener(name, () => drop.classList.remove("over")));
-  drop.addEventListener("drop", (event) => {
-    event.preventDefault();
-    const file = event.dataTransfer.files[0];
-    if (file) sendAudio(file, file.name);
-  });
+  drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+  drop.ondragleave = () => drop.classList.remove("over");
+  drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); chooseFile(e.dataTransfer.files[0]); };
+  window.addEventListener("pagehide", () => { if (state.recording || audio.starting) stopRecording(false); cancelComparison(); });
 }
-
 function init() {
-  /* Микрофон браузер отдаёт только в защищённом контексте. Сказать об этом заранее
-     честнее, чем дать нажать кнопку и показать ошибку: причина не в сервисе. */
-  if (!window.isSecureContext) {
-    const button = $("btn-record");
-    button.disabled = true;
-    button.dataset.i18nTitle = "mic.blockedTitle";
-    // Ключ подсказки живёт в разметке, поэтому смена языка не вернёт обратно фразу
-    // про перетаскивание, которая в незащищённом контексте неверна.
-    $("drop").dataset.i18n = "drop.hintInsecure";
-  }
-  $("btn-record").addEventListener("click", toggleRecording);
-  $("btn-stop").addEventListener("click", stopEngine);
-  $("btn-glossary").addEventListener("click", applyGlossary);
-  $("btn-add").addEventListener("click", commitInput);
-  $("tags").addEventListener("mousedown", (event) => {
-    if (event.target === $("tags") || event.target === $("tag-list")) {
-      event.preventDefault();
-      $("add-phrase").focus();
+  $("service-models").ontoggle = readServiceModels;
+  $("example-origin").value = location.origin;
+  const updateExamples = () => { document.querySelector('[data-page="api"] .manual')?.remove(); renderSnippets(); };
+  $("example-origin").oninput = updateExamples;
+  $("example-key").onchange = updateExamples;
+  $("reset-origin").onclick = () => { $("example-origin").value=location.origin; $("example-origin").oninput(); };
+  $("mobile-nav").onchange = e => { location.hash = e.target.value; };
+  document.querySelector(".skip").onclick = e => { e.preventDefault(); $("main").focus(); };
+  window.addEventListener("hashchange", () => showPage(true));
+  document.addEventListener("click", e => { const b = e.target.closest("button.copy"); if (b) copyText(b); });
+  document.querySelectorAll(".lang-option").forEach(b => b.onclick = () => switchLang(b.dataset.lang));
+  $("heads").onchange = e => { state.selected = e.target.value; state.configDirty = true; renderSelection(); };
+  $("config-form").oninput = () => { state.configDirty = true; renderDeploying(state.status || {}); };
+  $("config-form").onsubmit = e => { e.preventDefault(); if (!$("btn-deploy").disabled) deploy(state.selected); };
+  $("edit-key").onclick = async () => {
+    const entered = window.prompt(t("api.keyPrompt"), "");
+    if (entered === null) return;
+    $("service-models").open = false;
+    state.key = entered.trim(); state.keyAsked = true;
+    try { localStorage.setItem(KEY_STORAGE,state.key); } catch { /* Только в этой вкладке. */ }
+    renderSnippets(); await refreshStatus(); loadHeads(); loadGlossary(); connectEvents();
+  };
+  $("btn-deploy-env").onclick = deployFromEnv; $("btn-stop").onclick = stopEngine;
+  $("btn-add").onclick = commitInput; $("btn-glossary").onclick = applyGlossary;
+  $("glossary-retry").onclick = async () => { if (await loadGlossary()) setGlossaryHint(null); };
+  $("btn-export").onclick = exportGlossary;
+  $("glossary-file").onchange = async e => {
+    const file=e.target.files[0]; e.target.value=""; if (!file) return;
+    try { await importGlossary(file); } catch (err) { setGlossaryHint(() => err.message); }
+  };
+  $("add-phrase").onkeydown = e => {
+    if (e.isComposing) return;
+    if (e.key === "Enter" || e.key === ",") { e.preventDefault(); commitInput(); }
+    else if (e.key === "Backspace" && !e.target.value && glossary.entries.length) removePhrase(glossary.entries.length-1);
+  };
+  $("add-phrase").onpaste = e => {
+    const text = e.clipboardData?.getData("text");
+    if (text && /[\n,]/.test(text)) { e.preventDefault(); addPhrases(text); e.target.value=""; }
+  };
+  $("compare-form").onsubmit = runCompare;
+  $("compare-form").onchange = e => {
+    if (e.target.matches("select")) {
+      const other = $(e.target.id === "model-a" ? "model-b" : "model-a");
+      if (other.value === e.target.value) other.value = e.target.dataset.previous;
     }
-  });
-  $("add-phrase").addEventListener("keydown", (event) => {
-    if (event.key === "Enter" || event.key === ",") {
-      event.preventDefault();
-      commitInput();
-      return;
-    }
-    // Пустой ввод и Backspace — убрать последнюю фразу: привычно для полей с чипами.
-    if (event.key === "Backspace" && !event.target.value && glossary.entries.length) {
-      removePhrase(glossary.entries.length - 1);
-    }
-  });
-  $("add-phrase").addEventListener("paste", (event) => {
-    const text = (event.clipboardData || window.clipboardData).getData("text");
-    if (text && /[\n,]/.test(text)) {
-      event.preventDefault();
-      addPhrases(text);
-      event.target.value = "";
-    }
-  });
-  $("btn-deploy-env").addEventListener("click", deployFromEnv);
-  $("btn-export").addEventListener("click", exportGlossary);
-  $("glossary-file").addEventListener("change", (event) => {
-    const file = event.target.files[0];
-    if (file) importGlossary(file);
-    event.target.value = "";
-  });
-  $("file-input").addEventListener("change", (event) => {
-    const file = event.target.files[0];
-    if (file) sendAudio(file, file.name);
-  });
-  document.querySelectorAll(".copy").forEach((button) =>
-    button.addEventListener("click", () => {
-      navigator.clipboard.writeText($(button.dataset.target).textContent);
-      button.textContent = t("btn.copied");
-      setTimeout(() => { button.textContent = t("btn.copy"); }, 1500);
-    }));
-  document.querySelectorAll("#lang .lang-option").forEach((button) =>
-    button.addEventListener("click", () => switchLang(button.dataset.lang)));
-  bindDropZone();
-  applyStaticTexts();
-  renderRichTexts();
-  markLangButtons();
-  renderSnippets();
-  refreshStatus();
-  loadHeads();
-  loadGlossary();
-  connectEvents();
-  setInterval(refreshStatus, 5000);
+    compare.error=""; compare.payload=null; renderCompare(true);
+    if (e.target.id === "compare-file" && e.target.files.length) $("btn-compare").focus();
+  };
+  for (const id of ["journal-category","journal-level","journal-period"]) $(id).onchange = renderJournal;
+  bindAudio(); localize();
+  refreshStatus().then(() => { loadHeads(); loadGlossary(); connectEvents(); });
+  setInterval(() => { refreshStatus(); if (page === "journal") loadJournal(); }, 5000);
 }
 
 init();

@@ -1,13 +1,69 @@
 import re
+from html.parser import HTMLParser
+from pathlib import Path
 
-from conftest import route_paths
+import pytest
+
+from conftest import route_paths, wav_bytes
+
+
+STATIC = Path(__file__).resolve().parents[1] / "console" / "static"
+
+
+class Inputs(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.by_id = {}
+
+    def handle_starttag(self, _tag, attrs):
+        attrs = dict(attrs)
+        if "id" in attrs:
+            assert attrs["id"] not in self.by_id, attrs["id"]
+            self.by_id[attrs["id"]] = attrs
+
+
+def test_glossary_starts_locked_and_file_pickers_are_native():
+    markup = Inputs()
+    markup.feed((STATIC / "index.html").read_text(encoding="utf-8"))
+    for name in ("glossary-editor", "btn-glossary", "config-editor"):
+        assert "disabled" in markup.by_id[name]
+    assert markup.by_id["opt-boost"]["step"] == "any"  # API допускает, например, 4.25
+    assert "hidden" in markup.by_id["btn-compare"]  # до файла только действие выбора
+    for name in ("file-input", "compare-file", "glossary-file"):
+        attrs = markup.by_id[name]
+        assert attrs["type"] == "file" and "data-i18n-aria" in attrs
+        assert "hidden" not in attrs and attrs.get("tabindex") != "-1"
+
+
+def test_example_origin_is_isolated_from_transport_and_key():
+    js = (STATIC / "app.js").read_text(encoding="utf-8")
+    uses = re.findall(r"\bexampleOrigin\(\)", js)
+    assert len(uses) == 2  # определение и только рендер примеров
+    snippets = js.split("function renderSnippets()", 1)[1].split("\n}", 1)[0]
+    assert "exampleOrigin()" in snippets and '"/api/docs?api_key="' in snippets
+    assert not re.search(r"\b(?:fetch|api)\(", snippets)
+    assert "state.key" not in snippets.split('$("link-docs")')[0]
+    assert 'mode: "same-origin"' in js and 'redirect: "error"' in js
+    assert 'api("/v1/models")' in js and '/v1/models?api_key=' not in js
+
+
+def test_journal_and_comparison_use_separate_server_contracts():
+    js = (STATIC / "app.js").read_text(encoding="utf-8")
+    assert 'api("/api/journal")' in js and 'api("/api/compare"' in js
+    for field in ("variant_a", "variant_b", "file"):
+        assert f'form.append("{field}"' in js
+    assert 'compare_enabled === true' in js
+    assert 'innerHTML' not in js
+
 
 
 async def test_index_served_with_expected_sections(client_ready):
     """Разметка по-английски: это язык по умолчанию, русский включается кнопкой."""
     html = (await client_ready.get("/")).text
-    for marker in ["Status", "Models", "Check", "Glossary", "Connecting", "Logs"]:
-        assert marker in html
+    for page in ("dict", "compare", "api", "models", "settings", "glossary", "status", "journal"):
+        assert f'data-page="{page}"' in html
+        assert f'href="#{page}"' in html
+    assert "Kamerton" in html and "Dictation" in html
 
 
 async def test_index_links_its_own_assets(client_ready):
@@ -74,11 +130,6 @@ async def test_ui_advises_transliteration_and_never_lowercasing(client_ready):
     texts = (await client_ready.get("/static/i18n.js")).text
     assert "опенвиспр вместо OpenWhispr" in texts
     assert "Пишите строчными" not in texts
-
-
-async def test_sse_query_key_accepted(client_ready_with_key):
-    response = await client_ready_with_key.get("/api/status", params={"api_key": "secret"})
-    assert response.status_code == 200
 
 
 async def test_glossary_is_a_field_of_chips_with_import_and_export(client_ready):
@@ -162,19 +213,16 @@ async def test_head_cards_show_badges_with_their_source(client_ready):
     assert ".head-badge" in css
 
 
-async def test_deploy_progress_lives_on_the_head_card(client_ready):
-    """Один индикатор вместо двух: взгляд там, где нажали, а не в шапке страницы."""
+async def test_deploy_progress_next_to_explicit_apply(client_ready):
+    """Цель и процент берутся из статуса, индикатор стоит у явной кнопки запуска."""
     html = (await client_ready.get("/")).text
+    form = re.search(r'<form id="config-form".*?</form>', html, re.S).group()
+    assert 'id="btn-deploy" type="submit"' in form
+    assert '<progress id="deploy-progress"' in form
     js = (await client_ready.get("/static/app.js")).text
-    css = (await client_ready.get("/static/style.css")).text
-    assert "progress-bar" not in html  # верхнего индикатора больше нет
-    assert "renderDeploying" in js and "status.deploying" in js
-    assert "head-progress" in css and 'data-indeterminate' in css
-    texts = (await client_ready.get("/static/i18n.js")).text
-    for phase in ("скачиваю", "запускаю движок", "собираю граф"):
-        assert phase in texts
-    for phase in ("downloading", "starting the engine", "building the graph"):
-        assert phase in texts
+    assert "status.deploying" in js and "status.download_percent" in js
+    change = re.search(r'\$\("heads"\)\.onchange\s*=.*?};', js, re.S).group()
+    assert "state.selected" in change and "deploy(" not in change
 
 
 async def test_head_cards_are_built_once_and_updated_in_place(client_ready):
@@ -301,3 +349,121 @@ async def test_glossary_intro_states_the_selection_rule_not_the_weight_syntax(cl
     en = re.search(r'"glossary\.intro":\s*\n?\s*"([^"]*)"', texts).group(1)
     assert "gets wrong without help" in en
     assert "vertical bar" not in en
+
+
+async def test_mobile_feedback_and_model_list_in_chrome(live_client):
+    """Браузерная регрессия: uv run --with playwright pytest -k mobile_feedback (нужен Chrome)."""
+    pw = pytest.importorskip("playwright.async_api")
+    from console.state import EngineConfig
+
+    app = live_client.app
+    app.state.settings.api_key = "ui-test-only"
+    app.state.settings.max_upload_mb = 1
+    await app.state.supervisor.deploy(EngineConfig())
+    async with pw.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel="chrome")
+        try:
+            page = await browser.new_page(viewport={"width": 390, "height": 844})
+            await page.add_init_script("localStorage.setItem('stt_console_key', 'ui-test-only')")
+            await page.goto(str(live_client.base_url))
+            nav = page.locator("#mobile-nav")
+            await page.locator("#file-mode").click()
+            await page.locator("#file-input").set_input_files({
+                "name": "sample.wav", "mimeType": "audio/wav", "buffer": b"0" * (1024**2 + 1),
+            })
+            await page.locator("#btn-send").click()
+            await pw.expect(page.locator("#result-text")).to_contain_text("upload limit")
+            await page.locator(".mobile [data-lang=ru]").click()
+            await pw.expect(page.locator("#result-text")).to_contain_text("лимит загрузки")
+
+            await page.set_viewport_size({"width": 320, "height": 844})
+            await page.locator("#file-input").set_input_files({
+                "name": "sample.wav", "mimeType": "audio/wav", "buffer": wav_bytes(),
+            })
+            await page.locator("#btn-send").click()
+            await pw.expect(page.locator("#result")).to_be_visible()
+            assert await page.locator(".latency > div").evaluate_all("""rows => rows.every(row => {
+                const range = document.createRange(); range.selectNodeContents(row.firstElementChild);
+                return range.getBoundingClientRect().right < row.children[1].getBoundingClientRect().left;
+            })""")
+
+            await nav.select_option("glossary")
+            assert await page.locator("#btn-add").evaluate("""button => {
+                const range = document.createRange(); range.selectNodeContents(button);
+                return range.getClientRects().length === 1;
+            }""")
+            await page.locator("#btn-export").click()
+            await page.locator(".mobile [data-lang=en]").click()
+            await pw.expect(page.locator("#glossary-hint")).to_have_text(
+                await page.evaluate("i18n.t('glossary.empty')")
+            )
+            await nav.select_option("api")
+            async with page.expect_request(lambda r: r.url.endswith("/v1/models")) as req:
+                await page.locator("#service-models summary").click()
+            assert await (await req.value).header_value("authorization") == "Bearer ui-test-only"
+            await pw.expect(page.locator("#model-response")).to_contain_text('"data"')
+        finally:
+            await browser.close()
+
+
+@pytest.fixture
+async def chrome_page(live_client):
+    pw = pytest.importorskip("playwright.async_api")
+    async with pw.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel="chrome")
+        try:
+            yield await browser.new_page(), pw.expect
+        finally:
+            await browser.close()
+
+
+async def test_stop_after_failed_deploy_and_retry_in_chrome(chrome_page, live_client, monkeypatch):
+    from console.state import EngineConfig
+
+    page, expect = chrome_page
+    supervisor = live_client.app.state.supervisor
+    await supervisor.deploy(EngineConfig())
+    await page.goto(str(live_client.base_url) + "/#models")
+    monkeypatch.setenv("FAKE_DOWNLOAD_SLOW", "0.6")
+    monkeypatch.setenv("FAKE_DOWNLOAD_FAIL", "disk")
+    await page.locator("#target-ml_ctc").check()
+    await page.locator('[data-page=models] a[href="#settings"]').click()
+    await page.locator("#btn-deploy").click()
+    await page.locator('#railnav a[href="#status"]').click()
+    await expect(page.locator("#state-pill")).to_have_attribute("data-state", "downloading")
+    stop = page.locator("#btn-stop")
+    await expect(stop).to_be_hidden()
+    await expect(page.locator("#state-pill")).to_have_attribute("data-state", "error")
+    await expect(stop).to_be_visible()
+    await expect(stop).to_be_enabled()
+    await page.route("**/api/stop", lambda r: r.fulfill(status=503, body="Unavailable"), times=1)
+    feedback = page.locator("#stop-feedback")
+    await stop.click()
+    await expect(feedback).to_have_text("Could not stop the engine. Error 503")
+    async with page.expect_response(lambda r: r.url.endswith("/api/status")):
+        pass  # Ждём следующего штатного опроса.
+    await expect(feedback).to_contain_text("503")
+    await page.locator(".rail [data-lang=ru]").click()
+    await expect(feedback).to_have_text("Не удалось остановить движок. Ошибка 503")
+    await stop.click()
+    await expect(page.locator("#state-pill")).to_have_attribute("data-state", "stopped")
+    await expect(stop).to_be_hidden()
+    await expect(feedback).to_be_empty()
+    assert not supervisor.process.is_running
+
+
+async def test_bearer_switch_discards_manual_copy_in_chrome(chrome_page, live_client):
+    page, expect = chrome_page
+    await page.add_init_script("Object.defineProperty(navigator, 'clipboard', {value: undefined})")
+    await page.goto(str(live_client.base_url) + "/#api")
+    await expect(page.locator("#state-pill")).to_have_attribute("data-state", "stopped")
+    bearer, copy = page.locator("#example-key"), page.locator('[data-target="snip-curl"]')
+    await bearer.check()
+    await copy.click()
+    manual = page.locator(".manual textarea")
+    assert "Authorization: Bearer" in await manual.input_value()
+    await bearer.uncheck()
+    await expect(manual).to_have_count(0)
+    await copy.click()
+    assert await manual.input_value() == await page.locator("#snip-curl").text_content()
+    assert "Authorization" not in await manual.input_value()

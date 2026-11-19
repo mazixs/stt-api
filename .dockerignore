@@ -6,6 +6,8 @@
 .env.*
 *.pem
 *.key
+*.p12
+secrets.*
 data/
 models/
 *.wav
@@ -27,6 +29,13 @@ dist/
 .mypy_cache/
 .playwright-mcp/
 .claude/
+.agents/
+.codex/
+.gemini/
+skills-lock.json
+design-demos/
+hotwords.bak
+restore.json
 AGENTS.md
 CLAUDE.md
 bench/

@@ -7,13 +7,17 @@ never rewritten and uploads reach it byte for byte, browser WebM included since
 2.17.0 — the console reads the length of one to time it, and changes nothing.
 """
 
+import asyncio
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse, StreamingResponse
-from starlette.background import BackgroundTask
+from fastapi.responses import JSONResponse, Response, StreamingResponse
+from starlette.datastructures import UploadFile
+from starlette.types import Message, Receive, Scope, Send
 
 from .auth import require_api_key
 from .catalog import HEADS, openai_model_id
@@ -62,30 +66,55 @@ def require_ready(request: Request) -> None:
     )
 
 
-async def read_upload(request: Request) -> tuple[bytes, str, str, dict[str, str]]:
-    limit = request.app.state.settings.max_upload_bytes
-    declared = request.headers.get("content-length")
-    if declared and declared.isdigit() and int(declared) > limit + 8192:
-        raise ApiError(413, _too_big(limit), "file_too_large")
+class _BodyLimitExceeded(OSError):
+    """При OSError multipart-парсер закрывает уже созданные временные файлы."""
 
-    form = await request.form()
-    upload = form.get("file")
-    if upload is None or isinstance(upload, str):
-        raise ApiError(400, "Не передан аудиофайл в поле file.", "missing_file")
-    data = await upload.read()
-    if len(data) > limit:
+
+@asynccontextmanager
+async def _bounded_request(request: Request, body_limit: int) -> AsyncIterator[Request]:
+    limit = request.app.state.settings.max_upload_bytes
+    declared = request.headers.get("content-length", "")
+    if declared.isdecimal() and int(declared) > body_limit:
         raise ApiError(413, _too_big(limit), "file_too_large")
-    fields = {
-        key: value
-        for key, value in form.multi_items()
-        if key != "file" and isinstance(value, str)
-    }
-    return (
-        data,
-        upload.filename or "audio.wav",
-        upload.content_type or "application/octet-stream",
-        fields,
-    )
+    received = 0
+
+    async def receive() -> Message:
+        nonlocal received
+        message = await request.receive()
+        received += len(message.get("body", b""))
+        if received > body_limit:
+            raise _BodyLimitExceeded
+        return message
+
+    bounded = Request(request.scope, receive=receive)
+    try:
+        yield bounded
+    except _BodyLimitExceeded:
+        raise ApiError(413, _too_big(limit), "file_too_large") from None
+    finally:
+        await bounded.close()
+
+
+@asynccontextmanager
+async def parse_upload(request: Request) -> AsyncIterator[tuple[UploadFile, dict[str, str]]]:
+    limit = request.app.state.settings.max_upload_bytes
+    async with _bounded_request(request, limit + 8192) as bounded:
+        form = await bounded.form()
+        upload = form.get("file")
+        if not isinstance(upload, UploadFile):
+            raise ApiError(400, "Не передан аудиофайл в поле file.", "missing_file")
+        if upload.size is not None and upload.size > limit:
+            raise ApiError(413, _too_big(limit), "file_too_large")
+        fields = {k: v for k, v in form.multi_items() if k != "file" and isinstance(v, str)}
+        yield upload, fields
+
+
+async def read_upload(request: Request) -> tuple[bytes, str, str, dict[str, str]]:
+    async with parse_upload(request) as (upload, fields):
+        return (
+            await upload.read(), upload.filename or "audio.wav",
+            upload.content_type or "application/octet-stream", fields,
+        )
 
 
 def upload_duration_seconds(data: bytes) -> float | None:
@@ -139,6 +168,24 @@ def _warn_once(request: Request, ignored: str) -> None:
     )
 
 
+class _EngineStream(StreamingResponse):
+    def __init__(self, client: httpx.AsyncClient, upstream: httpx.Response,
+                 body: AsyncIterator[bytes], headers: dict[str, str]) -> None:
+        super().__init__(body, status_code=upstream.status_code, headers=headers)
+        self.client = client
+        self.upstream = upstream
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        # BackgroundTask не вызывается, если upstream или отправка ответа упали.
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            try:
+                await self.upstream.aclose()
+            finally:
+                await self.client.aclose()
+
+
 async def forward_transcription(
     request: Request,
     path: str = "/v1/audio/transcriptions",
@@ -153,7 +200,7 @@ async def forward_transcription(
 
     duration = upload_duration_seconds(data)
 
-    client = httpx.AsyncClient(timeout=TRANSCRIBE_TIMEOUT)
+    client = httpx.AsyncClient(timeout=TRANSCRIBE_TIMEOUT, trust_env=False)
     engine_request = client.build_request(
         "POST",
         f"{settings.engine_base_url}{path}",
@@ -162,6 +209,9 @@ async def forward_transcription(
     )
     try:
         response = await client.send(engine_request, stream=True)
+    except asyncio.CancelledError:
+        await client.aclose()
+        raise
     except httpx.HTTPError as exc:
         await client.aclose()
         raise ApiError(
@@ -172,16 +222,10 @@ async def forward_transcription(
         ) from exc
 
     async def body():
-        try:
-            async for chunk in response.aiter_raw():
-                yield chunk
-        finally:
-            if response.status_code < 400:
-                metrics.record(duration, time.perf_counter() - started, filename)
-
-    async def cleanup():
-        await response.aclose()
-        await client.aclose()
+        async for chunk in response.aiter_raw():
+            yield chunk
+        if response.status_code < 400:
+            metrics.record(duration, time.perf_counter() - started, filename)
 
     headers = {
         key: value
@@ -192,13 +236,7 @@ async def forward_transcription(
     if ignored:
         _warn_once(request, ignored["X-Ignored-Fields"])
     headers.update(ignored)
-    return StreamingResponse(
-        body(),
-        status_code=response.status_code,
-        headers=headers,
-        media_type=response.headers.get("content-type"),
-        background=BackgroundTask(cleanup),
-    )
+    return _EngineStream(client, response, body(), headers)
 
 
 @router.post("/v1/audio/transcriptions")
@@ -245,6 +283,37 @@ async def models(request: Request) -> dict[str, Any]:
     return {"object": "list", "data": data}
 
 
+def _passthrough_headers(response: httpx.Response) -> dict[str, str]:
+    return {key: value for key, value in response.headers.items() if key.lower() not in HOP_BY_HOP}
+
+
+async def _native_reload(
+    request: Request, url: str, params: list[tuple[str, str]], body: bytes, headers: dict[str, str],
+) -> Response:
+    async def reload() -> Response:
+        require_ready(request)
+        async with httpx.AsyncClient(timeout=TRANSCRIBE_TIMEOUT, trust_env=False) as client:
+            try:
+                async with client.stream("POST", url, params=params, content=body, headers=headers) as response:
+                    content = b"".join([chunk async for chunk in response.aiter_raw()])
+                    return Response(
+                        content, status_code=response.status_code, headers=_passthrough_headers(response),
+                    )
+            except httpx.HTTPError as exc:
+                raise ApiError(
+                    502, f"Движок не ответил: {exc}", "engine_unreachable", type_="server_error"
+                ) from exc
+
+    response = await request.app.state.supervisor.run_native_reload(reload)
+    if response is not None:
+        return response
+    # Такой же конфликт, как у upstream, вместо очереди повторных reload.
+    return JSONResponse(
+        {"error": "A model reload is already in progress", "code": "reload_in_progress"},
+        status_code=409,
+    )
+
+
 # `include_in_schema=False`: одна запись с подстановкой `{path}` ничего не сообщает
 # читателю схемы, а три метода на одном маршруте дают FastAPI повторяющийся
 # operation id и предупреждение при каждой сборке схемы. Родные эндпоинты движка
@@ -252,44 +321,39 @@ async def models(request: Request) -> dict[str, Any]:
 @router.api_route(
     "/v1/{path:path}", methods=["GET", "POST", "DELETE"], include_in_schema=False
 )
-async def passthrough(request: Request, path: str) -> StreamingResponse:
+async def passthrough(request: Request, path: str) -> Response:
     """Everything else the engine exposes (native /v1/transcribe, /v1/jobs, ...)."""
     require_ready(request)
     settings = request.app.state.settings
     url = f"{settings.engine_base_url}/v1/{path}"
-    body = await request.body()
+    async with _bounded_request(request, settings.engine_body_limit_bytes) as bounded:
+        body = await bounded.body()
+    # Ключ консоли не должен попасть в URL движка и технические логи.
+    params = [(k, v) for k, v in request.query_params.multi_items() if k != "api_key"]
     headers = {
         key: value for key, value in request.headers.items() if key.lower() not in HOP_BY_HOP
     }
+    # Проверяем путь после нормализации HTTPX, а не исходный сегмент catch-all.
+    if request.method == "POST" and httpx.URL(url).path == "/v1/admin/reload":
+        return await _native_reload(request, url, params, body, headers)
 
-    client = httpx.AsyncClient(timeout=TRANSCRIBE_TIMEOUT)
+    client = httpx.AsyncClient(timeout=TRANSCRIBE_TIMEOUT, trust_env=False)
     engine_request = client.build_request(
         request.method,
         url,
-        params=dict(request.query_params),
+        params=params,
         content=body,
         headers=headers,
     )
     try:
         response = await client.send(engine_request, stream=True)
+    except asyncio.CancelledError:
+        await client.aclose()
+        raise
     except httpx.HTTPError as exc:
         await client.aclose()
         raise ApiError(
             502, f"Движок не ответил: {exc}", "engine_unreachable", type_="server_error"
         ) from exc
 
-    async def cleanup():
-        await response.aclose()
-        await client.aclose()
-
-    return StreamingResponse(
-        response.aiter_raw(),
-        status_code=response.status_code,
-        headers={
-            key: value
-            for key, value in response.headers.items()
-            if key.lower() not in HOP_BY_HOP
-        },
-        media_type=response.headers.get("content-type"),
-        background=BackgroundTask(cleanup),
-    )
+    return _EngineStream(client, response, response.aiter_raw(), _passthrough_headers(response))

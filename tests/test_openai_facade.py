@@ -1,3 +1,6 @@
+import httpx
+import pytest
+
 from conftest import wav_bytes
 
 AUDIO = {"file": ("a.wav", wav_bytes(seconds=2), "audio/wav")}
@@ -40,6 +43,28 @@ async def test_streaming_sse_passes_through(client_ready):
         body = "".join([chunk async for chunk in response.aiter_text()])
     assert "transcript.text.delta" in body
     assert "[DONE]" in body
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/v1/transcribe"])
+async def test_failed_stream_releases_engine_and_is_not_a_success(client_ready, path, monkeypatch):
+    class BrokenStream(httpx.AsyncByteStream):
+        closed = False
+
+        async def __aiter__(self):
+            yield b"partial"
+            raise httpx.ReadError("test stream ended early")
+
+        async def aclose(self):
+            self.closed = True
+
+    stream = BrokenStream()
+    transport = httpx.MockTransport(lambda req: httpx.Response(200, stream=stream))
+    upstream = httpx.AsyncClient(transport=transport)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: upstream)
+    with pytest.raises(httpx.ReadError):
+        await client_ready.post(path, files=AUDIO)
+    assert stream.closed and upstream.is_closed
+    assert client_ready.app.state.metrics.snapshot()["count"] == 0
 
 
 async def test_models_endpoint_lists_heads_and_alias(client_ready):
@@ -90,6 +115,46 @@ async def test_metrics_recorded_with_rtf_for_wav(client_ready):
     snapshot = client_ready.app.state.metrics.snapshot()
     assert snapshot["count"] == 1
     assert snapshot["avg_rtf"] is not None  # 2 s WAV => duration known
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/api/test", "/v1/transcribe"])
+async def test_upload_limit_while_receiving_chunked_body(client_ready, path):
+    client_ready.app.state.settings.max_upload_mb = 1
+
+    async def chunks():
+        yield b'--test\r\nContent-Disposition: form-data; name="file"; filename="sample.wav"\r\n\r\n'
+        for _ in range(5):
+            yield b"0" * (512 * 1024)
+        pytest.fail("Получатель продолжил читать тело после отказа по размеру")
+
+    response = await client_ready.post(path, content=chunks(), headers={
+        "Content-Type": "multipart/form-data; boundary=test",
+    })
+    assert response.status_code == 413 and response.json()["error"]["code"] == "file_too_large"
+
+
+async def test_local_engine_traffic_ignores_environment_proxy(client_ready, monkeypatch):
+    # Заведомо несуществующая схема не открывает соединений даже при регрессии.
+    monkeypatch.setenv("HTTP_PROXY", "invalid-scheme://no-proxy.invalid")
+    monkeypatch.setenv("http_proxy", "invalid-scheme://no-proxy.invalid")
+    monkeypatch.setenv("NO_PROXY", "")
+    monkeypatch.setenv("no_proxy", "")
+    process = client_ready.app.state.supervisor.process
+    assert await process.health() and await process.reload()
+    for path in ("/api/test", "/v1/audio/transcriptions", "/v1/transcribe", "/v1/admin/reload"):
+        assert (await client_ready.post(path, files=AUDIO)).status_code == 200
+
+
+async def test_native_query_excludes_console_key_and_preserves_lists(client_ready_with_key):
+    client = client_ready_with_key
+    response = await client.post(
+        "/v1/admin/reload", headers={"Authorization": "Bearer secret"},
+        params=[("api_key", "discard-me"), ("option", "one"), ("option", "two")],
+    )
+    assert response.status_code == 200
+    logs = client.app.state.bus.log_lines()
+    assert any("/v1/admin/reload?option=one&option=two" in line for line in logs)
+    assert all("api_key=" not in line for line in logs)
 
 
 async def test_native_engine_endpoint_passthrough(client_ready):

@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import signal
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -20,6 +21,28 @@ from .state import EngineConfig
 
 class EngineStartupError(RuntimeError):
     pass
+
+
+async def wait_uninterrupted[T](task: asyncio.Future[T]) -> T:
+    """Не освобождать ресурсы операции, пока она работает, даже при отмене запроса."""
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+    result = task.result()
+    if cancelled:
+        raise asyncio.CancelledError
+    return result
+
+
+def build_compare_argv(settings: Settings, audio: Path, model_dir: Path, variant: str, output: Path) -> list[str]:
+    return engine_command(
+        settings, "transcribe", str(audio), "--offline", "--model-dir", str(model_dir),
+        "--model-variant", variant, "--file-window-concurrency", "1",
+        "--punctuation", "off", "--itn", "off", "--format", "json", "--output", str(output),
+    )
 
 
 def build_argv(settings: Settings, cfg: EngineConfig) -> list[str]:
@@ -86,6 +109,7 @@ class EngineProcess:
         self.on_exit = on_exit or (lambda code: None)
         self.config: EngineConfig | None = None
         self._process: asyncio.subprocess.Process | None = None
+        self._stop_task: asyncio.Task[None] | None = None
         self._tasks: list[asyncio.Task[Any]] = []
         self._expected_exit = False
 
@@ -98,8 +122,8 @@ class EngineProcess:
         return self._process.pid if self._process else None
 
     async def start(self, cfg: EngineConfig) -> None:
-        if self.is_running:
-            raise RuntimeError("engine already running")
+        if self.is_running or (self._stop_task is not None and not self._stop_task.done()):
+            raise RuntimeError("engine already running or stopping")
         argv = build_argv(self.settings, cfg)
         env = engine_env(self.settings)
         env["RUST_LOG"] = f"gigastt={self.settings.log_level}"
@@ -138,6 +162,12 @@ class EngineProcess:
         self.on_exit(code)
 
     async def stop(self, timeout: float = 15.0) -> None:
+        # Одна операция SIGTERM → kill → wait; отмена вызывающего не бросает процесс.
+        if self._stop_task is None or self._stop_task.done():
+            self._stop_task = asyncio.create_task(self._stop(timeout))
+        await wait_uninterrupted(self._stop_task)
+
+    async def _stop(self, timeout: float) -> None:
         process, self._process = self._process, None
         self._expected_exit = True
         if process is not None and process.returncode is None:
@@ -162,7 +192,7 @@ class EngineProcess:
         if not self.is_running:
             return None
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
                 response = await client.get(f"{self.settings.engine_base_url}/health")
             if response.status_code != 200:
                 return None
@@ -193,7 +223,7 @@ class EngineProcess:
         if not self.is_running:
             return False
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
                 response = await client.post(f"{self.settings.engine_base_url}/v1/admin/reload")
             return response.status_code == 200
         except httpx.HTTPError:

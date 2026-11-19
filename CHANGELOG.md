@@ -14,8 +14,10 @@ at `/api/openapi.json` (`info.version`) read it from there.
 
 ### Added
 
+- `GET /api/journal` exposes a bounded in-memory history of deployment and engine events, separate from technical logs.
+- Optional model comparison runs two downloaded models on one file without switching the live engine. It requires `ENABLE_MODEL_COMPARE=1` and a non-empty `API_KEY`.
 - The web console is bilingual. English is the default and Russian is switched on with
-  the EN/RU control in the header; the choice is kept in the browser and survives a
+  the EN/RU switch; the choice is kept in the browser and survives a
   reload. Nothing is auto-detected from the browser language.
 - `GET /api/models` accepts `?lang=en|ru` and localises the head descriptions, badges
   and notes, falling back to English for an unknown value.
@@ -31,6 +33,11 @@ at `/api/openapi.json` (`info.version`) read it from there.
 
 ### Changed
 
+- The public `/health` response keeps the `engine_detail` string, now a fixed message for each engine status, and adds `engine_detail_code`. Diagnostic text remains available as `detail` in `/api/status`.
+- Transcription metrics no longer count a stream interrupted while reading the engine response as a successful run.
+- Docker Compose now binds the console to loopback by default. For remote access, see the [Quick start](README.md#quick-start).
+- API clients must send the key as `Authorization: Bearer`. Query keys remain accepted only for `GET /api/events`, `GET /api/docs`, and `GET /api/openapi.json`.
+- The Kamerton web console uses a wide layout for dictation, comparison, API setup, model selection, startup settings, glossary, service status and the journal. Model selection is separate from deployment.
 - `README.md` is now the English one and the Russian text moved to `README.ru.md`; the
   two are cross-linked. The documents under `docs/` stay Russian only.
 - Static assets are fingerprinted (`?v=<hash>`), so a changed `i18n.js`, `app.js` or
@@ -48,13 +55,19 @@ at `/api/openapi.json` (`info.version`) read it from there.
 
 ### Fixed
 
+- A failed model change no longer hides the stop button while the previous engine is running. A failed stop remains visible even after the status refreshes.
+- Changing the Bearer option clears the stale manual-copy field in API examples.
+- The local Compose overlay uses a separate project and image tag so it does not replace the base project's service or image.
+- Updated gigastt to [2.22.0](https://github.com/ekhodzitsky/gigastt/releases/tag/v2.22.0),
+  which fixes WebM/Opus with a non-48 kHz header and improves long-file overlap
+  stitching. See the [Docker smoke results](docs/manual-smoke.md#результат-проверки-gigastt-2220).
 - A glossary phrase containing a tab or a newline no longer corrupts the engine's
   hotwords file, where a tab means "weight follows" and a newline means "next phrase".
 
 ### Notes
 
 - `detail` keeps its Russian wording on purpose: it is also the log line.
-- The per-phrase weight after a vertical bar is a switch, not a dial: engine 2.21.0
+- The per-phrase weight after a vertical bar is a switch, not a dial: the engine
   keeps one boost for the whole trie. The syntax is unchanged, the console no longer
   implies a strength that does not exist.
 
@@ -115,11 +128,9 @@ at `/api/openapi.json` (`info.version`) read it from there.
   of real dictation rather than on the upstream description: one difference across the
   whole set, and it was a correction
   ([measurement](docs/research/head-choice-and-wer.md)).
-- `MAX_UPLOAD_MB` on our production install was lowered from 1000 to 500 because we
-  measured a gigabyte. It passes on time and text (200 files, 1206.7 s, 355,015
-  characters over 9 hours of speech) but strains memory: the container peaked at 2786.7
-  MiB against a 2861 MiB ceiling. At 500 MiB it is 600.8 s and 1716.0 MiB. The default
-  in code remains 150.
+- Measured the effect of `MAX_UPLOAD_MB` on memory. A 1000 MiB file took 1206.7 s
+  and peaked at 2786.7 MiB against a 2861 MiB container limit. At 500 MiB the run
+  took 600.8 s and peaked at 1716.0 MiB. The default remains 150 MiB.
 - The engine was updated to 2.20.0. WAV file uploads did not change by a single byte,
   and WebM/Opus moved closer to WAV thanks to the engine's new Opus decoder
   ([measurement](docs/research/head-choice-and-wer.md)).

@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     autostart: bool = True
     max_upload_mb: int = Field(default=150, ge=1)
     enable_jobs: bool = False
+    enable_model_compare: bool = False
     hf_token: str = ""
     log_level: str = "info"
 
@@ -111,6 +112,10 @@ class Settings(BaseSettings):
             for settings_name, engine_name in self._ENGINE_FIELD_NAMES.items()
             if settings_name in self.model_fields_set
         }
+
+    @property
+    def compare_enabled(self) -> bool:
+        return self.enable_model_compare and bool(self.api_key)
 
     @property
     def engine_base_url(self) -> str:

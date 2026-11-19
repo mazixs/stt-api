@@ -1,3 +1,5 @@
+import asyncio
+
 import httpx
 import pytest
 from conftest import wait_for
@@ -127,6 +129,51 @@ async def test_restore_on_boot_redeploys_last_desired(console_settings, bus):
         await sup.restore_on_boot()
         assert sup.status == "ready"
         assert sup.current.variant == "e2e_rnnt"
+    finally:
+        await sup.shutdown()
+
+
+async def test_restore_last_good_recovers_after_early_exits(console_settings, bus, monkeypatch):
+    last_good = cfg(variant="e2e_rnnt")
+    StateFile(console_settings.state_path).save(
+        State(status="ready", detail="", desired=last_good, last_good=last_good)
+    )
+    sup = Supervisor(console_settings, bus)
+    start = sup.process.start
+    starts, failures = [], []
+    now = asyncio.get_running_loop().time
+    record = sup.journal.record
+
+    def record_event(code, *args, **kwargs):
+        if code in {"start.failed", "watchdog.failed"}:
+            failures.append(now())
+        record(code, *args, **kwargs)
+
+    monkeypatch.setattr(sup.journal, "record", record_event)
+    monkeypatch.setattr("console.supervisor.BACKOFF_DELAYS", (0.2, 0.3))
+
+    async def start_with_two_early_exits(config):
+        assert config == last_good
+        starts.append(now())
+        if len(starts) <= 2:
+            monkeypatch.setenv("FAKE_CRASH_AFTER", "0.01")
+            monkeypatch.setenv("FAKE_STARTUP_DELAY", "1")
+        else:
+            monkeypatch.delenv("FAKE_CRASH_AFTER")
+            monkeypatch.delenv("FAKE_STARTUP_DELAY")
+        await start(config)
+
+    monkeypatch.setattr(sup.process, "start", start_with_two_early_exits)
+    try:
+        await sup.restore_on_boot()
+        assert sup.detail_code == "start.failed" and sup._restart_task is not None
+        await asyncio.wait_for(sup._restart_task, 10)
+        assert len(starts) == 3 and len(failures) == 2
+        assert starts[1] - failures[0] >= 0.19 and starts[2] - failures[1] >= 0.29
+        assert sup.current == last_good and sup.detail_code == "watchdog.ready"
+        codes = [event["code"] for event in reversed(sup.journal.snapshot())]
+        assert codes == ["deploy.downloading", "deploy.starting", "start.failed", "watchdog.restarting",
+                         "watchdog.failed", "watchdog.restarting", "watchdog.ready"]
     finally:
         await sup.shutdown()
 

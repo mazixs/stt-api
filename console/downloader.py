@@ -11,6 +11,7 @@ import os
 import re
 import sys
 from collections.abc import Callable
+from contextlib import suppress
 from typing import Any
 
 from .catalog import HEADS
@@ -106,7 +107,10 @@ async def download(settings: Settings, variant: str, on_event: EventSink) -> Non
     if head is None:
         raise ValueError(f"unknown head: {variant}")
 
-    settings.model_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        settings.model_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise DownloadError("disk", _MESSAGES["disk"], 74) from exc
     argv = engine_command(
         settings,
         "download",
@@ -118,13 +122,19 @@ async def download(settings: Settings, variant: str, on_event: EventSink) -> Non
         "json",
     )
 
+    spawn = asyncio.create_task(asyncio.create_subprocess_exec(
+        *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        env=engine_env(settings),
+    ))
     try:
-        process = await asyncio.create_subprocess_exec(
-            *argv,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=engine_env(settings),
-        )
+        process = await asyncio.shield(spawn)
+    except asyncio.CancelledError:
+        with suppress(OSError):
+            process = await spawn
+            with suppress(ProcessLookupError):
+                process.kill()
+            await process.communicate()
+        raise
     except OSError as exc:
         raise DownloadError("other", f"Не удалось запустить движок: {exc}", 1) from exc
 
@@ -168,8 +178,18 @@ async def download(settings: Settings, variant: str, on_event: EventSink) -> Non
                 if percent is not None:
                     on_event({"phase": "progress", "percent": percent})
 
-    await asyncio.gather(pump_stdout(), pump_stderr())
-    code = await process.wait()
+    pumps = [asyncio.create_task(pump_stdout()), asyncio.create_task(pump_stderr())]
+    try:
+        await asyncio.gather(*pumps)
+        code = await process.wait()
+    finally:
+        if process.returncode is None:
+            with suppress(ProcessLookupError):
+                process.kill()
+            for task in pumps:
+                task.cancel()
+            await asyncio.gather(*pumps, return_exceptions=True)
+            await process.communicate()
     if code == 0:
         return
 
