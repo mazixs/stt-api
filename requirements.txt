@@ -1,5 +1,9 @@
 # Runtime dependencies of the console, pinned for reproducible images.
 # Tests run from pyproject.toml via `uv sync`; this file is only for the container.
+argon2-cffi==25.1.0
+argon2-cffi-bindings==26.2.0
+cffi==2.1.1
+pycparser==3.12
 fastapi==0.140.13
 uvicorn[standard]==0.51.0
 httpx==0.28.1

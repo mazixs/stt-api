@@ -51,7 +51,9 @@ Open `http://localhost:8091` on the Docker host. On Docker Engine 28 or later,
 the default loopback bind keeps this port off the LAN and the internet.
 [Older engines had a LAN exception](https://docs.docker.com/engine/network/port-publishing/).
 
-For access from another computer, keep the loopback bind and use an SSH tunnel,
+**For an owner login and revocable keys for apps**, use the separate [HTTPS/Caddy profile](docs/public-access.md) (guide in Russian). Only Caddy publishes ports; clients use `https://your-domain/v1` and a Bearer key, not the owner's password. The quick start and the key permissions below describe the **local** profile.
+
+For private access to that local profile, keep the loopback bind and use an SSH tunnel,
 or put an HTTPS reverse proxy on the Docker host in front of `127.0.0.1:8091`.
 A browser needs trusted HTTPS to use the microphone from another device;
 `http://localhost` is an exception only on the machine running the browser.
@@ -177,7 +179,7 @@ checks both 16 and 48 kHz headers. With `stream=true` on a file upload, use
 `transcript.text.done` for the final transcript and `[DONE]` to confirm completion;
 intermediate deltas are not the final text.
 
-### What is exposed
+### Access in the local profile
 
 A non-empty `API_KEY` protects the API routes, except for `/health`. In **Service
 status → Set API key**, enter the key already configured on the server. This

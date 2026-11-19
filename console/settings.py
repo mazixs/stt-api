@@ -28,7 +28,11 @@ class Settings(BaseSettings):
     )
 
     console_port: int = 8080
-    api_key: str = ""
+    api_key: str = Field(default="", repr=False)
+    owner_access: bool = False
+    allow_owner_local_rollback: bool = False
+    public_origin: str = ""
+    trusted_proxy_ip: str = ""
 
     model_variant: HeadId = "rnnt"
     punctuation: Mode = "auto"
@@ -115,11 +119,12 @@ class Settings(BaseSettings):
 
     @property
     def compare_enabled(self) -> bool:
-        return self.enable_model_compare and bool(self.api_key)
+        return self.enable_model_compare and (self.owner_access or bool(self.api_key))
 
     @property
     def engine_base_url(self) -> str:
-        return f"http://{self.engine_host}:{self.engine_port}"
+        host = f"[{self.engine_host}]" if ":" in self.engine_host else self.engine_host
+        return f"http://{host}:{self.engine_port}"
 
     @property
     def state_path(self) -> Path:

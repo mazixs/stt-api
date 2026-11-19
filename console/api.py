@@ -17,12 +17,14 @@ from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from . import owner_access
 from .auth import require_api_key
 from .catalog import DEFAULT_LANG, HEADS, LANGS, is_downloaded, pick
 from .errors import ApiError
 from .glossary import entry_issues, parse_context, read_glossary
 from .proxy import (
     TRANSCRIBE_TIMEOUT,
+    models as client_models,
     read_upload,
     require_ready,
     upload_duration_seconds,
@@ -33,6 +35,7 @@ from .vocab import head_alphabet, split_representable
 
 router = APIRouter()
 admin = APIRouter(prefix="/api", dependencies=[Depends(require_api_key)])
+admin.add_api_route("/client-models", client_models, methods=["GET"])
 STARTED_AT = time.monotonic()
 
 
@@ -125,7 +128,7 @@ def _status_payload(request: Request) -> dict[str, Any]:
             "diverges": supervisor.env_divergence(),
         },
         "metrics": request.app.state.metrics.snapshot(),
-        "api_key_set": bool(settings.api_key),
+        "api_key_set": settings.owner_access or bool(settings.api_key),
         "glossary_count": supervisor.glossary_count,
         "restart_count": supervisor.restart_count,
         "uptime_seconds": int(time.monotonic() - STARTED_AT),
@@ -273,7 +276,25 @@ async def events(request: Request) -> StreamingResponse:
             yield _sse({"type": "snapshot", **snapshot})
             for line in log_lines:
                 yield _sse({"type": "log", "line": line})
-            async for event in subscription:
+            if not request.app.state.settings.owner_access:
+                async for event in subscription:
+                    yield _sse(event)
+                return
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + owner_access.SSE_CHECK_SECONDS
+            while True:
+                if loop.time() >= deadline:
+                    try:
+                        if not await owner_access.live_session(request):
+                            return
+                    except ApiError:
+                        return
+                    deadline = loop.time() + owner_access.SSE_CHECK_SECONDS
+                try:
+                    async with asyncio.timeout_at(deadline):
+                        event = await anext(subscription)
+                except TimeoutError:
+                    continue
                 yield _sse(event)
         finally:
             await subscription.aclose()
@@ -349,6 +370,14 @@ async def swagger_ui(request: Request) -> HTMLResponse:
     заголовок при переходе по ссылке. Пришедший так ключ страница подставляет в ссылку
     на схему — иначе Swagger получил бы 401 на первом же запросе к `/api/openapi.json`.
     """
+    if request.app.state.settings.owner_access:
+        return HTMLResponse(
+            '<!doctype html><html lang="ru"><meta charset="utf-8"><title>Камертон — API</title>'
+            '<main><h1>Камертон — API</h1><p>Клиентские приложения используют Bearer-ключ. '
+            'Управление консолью доступно по сессии владельца.</p>'
+            '<a href="/api/openapi.json">Открыть схему OpenAPI (JSON)</a></main></html>',
+            headers={"Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"},
+        )
     presented = request.query_params.get("api_key", "")
     openapi_url = "/api/openapi.json"
     if presented:

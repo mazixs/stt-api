@@ -14,6 +14,7 @@ at `/api/openapi.json` (`info.version`) read it from there.
 
 ### Added
 
+- Optional [HTTPS owner profile](docs/public-access.md): sign in to the console with one owner account and issue separate, revocable Bearer keys to applications. Caddy is the only published service. Initialize or recover the owner with the offline CLI; the base Compose file keeps its local port and key behavior.
 - `GET /api/journal` exposes a bounded in-memory history of deployment and engine events, separate from technical logs.
 - Optional model comparison runs two downloaded models on one file without switching the live engine. It requires `ENABLE_MODEL_COMPARE=1` and a non-empty `API_KEY`.
 - The web console is bilingual. English is the default and Russian is switched on with

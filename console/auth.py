@@ -15,8 +15,20 @@ from .errors import ApiError
 _QUERY_KEY_PATHS = frozenset({"/api/events", "/api/docs", "/api/openapi.json"})
 
 
+async def require_client_key(request: Request) -> None:
+    if request.app.state.settings.owner_access:
+        if getattr(request.state, "owner_subject", None) != "client":
+            raise ApiError(401, "Требуется Bearer-ключ.", "invalid_api_key", "authentication_error")
+        return
+    await require_api_key(request)
+
+
 async def require_api_key(request: Request) -> None:
     settings = request.app.state.settings
+    if settings.owner_access:
+        if getattr(request.state, "owner_subject", None) != "owner":
+            raise ApiError(401, "Войдите в консоль.", "session_required", "authentication_error")
+        return
     if not settings.api_key:
         return
     header = request.headers.get("authorization", "")

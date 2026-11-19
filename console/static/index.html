@@ -14,7 +14,11 @@
     <symbol id="i-fork" viewBox="0 0 42 42"><rect width="42" height="42" rx="8" fill="#e3e4e0"/><g fill="none" stroke="#292a2b" stroke-linecap="round" stroke-width="3.3"><path d="M11 10v9c0 8 13 8 13 0v-9M17.5 25v8m1-23v8M29 10v13"/></g></symbol>
     <symbol id="i-dict" viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="13" rx="4"/><path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4m-4 0h8"/></symbol><symbol id="i-file" viewBox="0 0 24 24"><path d="M5 3h9l5 5v13H5zM14 3v6h5M8 15h2l1-2 2 4 1-2h2"/></symbol><symbol id="i-compare" viewBox="0 0 24 24"><path d="M3 6h12m-3-3 3 3-3 3M21 18H9m3-3-3 3 3 3M4 12h4m8 0h4"/></symbol><symbol id="i-models" viewBox="0 0 24 24"><path d="m3 8 9-5 9 5-9 5zM3 12l9 5 9-5m-18 4 9 5 9-5"/></symbol><symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 6h6m4 0h6M4 12h10m4 0h2M4 18h2m4 0h10"/><circle cx="12" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="8" cy="18" r="2"/></symbol><symbol id="i-gloss" viewBox="0 0 24 24"><path d="M3 4q5-2 9 1 4-3 9-1v15q-5-2-9 1-4-3-9-1zM12 5v15"/></symbol><symbol id="i-status" viewBox="0 0 24 24"><path d="M2 12h5l3-7 4 14 3-7h5"/></symbol><symbol id="i-log" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8m-8 4h8m-8 4h5"/></symbol><symbol id="i-api" viewBox="0 0 24 24"><path d="m7 7-5 5 5 5m10-10 5 5-5 5m-3-14-4 18"/></symbol><symbol id="i-text" viewBox="0 0 24 24"><path d="M4 5h16M4 10h16M4 15h10m-10 5h13"/></symbol><symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/></symbol><symbol id="i-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol><symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h15m-6-6 6 6-6 6"/></symbol><symbol id="i-ext" viewBox="0 0 24 24"><path d="M14 3h7v7m0-7L10 14m0-9H4v15h15v-6"/></symbol><symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h6l2 2h10v12H3z"/></symbol>
     </defs></svg>
-    <div class="shell">
+    <section id="session-check" class="session-check" aria-live="polite">
+      <p id="session-message" data-i18n="auth.checking">Connecting to the console…</p>
+      <button type="button" id="session-retry" data-i18n="head.retry" hidden>Try again</button>
+    </section>
+    <div class="shell" hidden>
       <aside class="rail">
         <div class="brand"><svg class="logo" aria-hidden="true"><use href="#i-fork"/></svg>
           <div><span data-i18n="brand.name">Kamerton</span><small data-i18n="brand.sub">Speech console</small>
@@ -50,7 +54,8 @@
         </header>
         <main id="main" tabindex="-1">
           <header class="pagehead">
-            <h1 id="heading">Dictation</h1>
+            <div class="titleline"><h1 id="heading">Dictation</h1><button type="button" id="owner-logout" class="soft" data-i18n="auth.logout" hidden>Sign out</button></div>
+            <p id="logout-error" class="error" role="alert"></p>
             <p id="intro">Record a phrase or transcribe an audio file.</p>
           </header>
           <section data-page="dict" class="dictwork" aria-labelledby="heading">
@@ -192,6 +197,19 @@
           </section>
           <section data-page="api" hidden class="apiwork panelgrid" aria-labelledby="heading">
             <div class="stack">
+              <section class="panel stack" id="owner-keys" aria-labelledby="key-title" hidden>
+                <h2 id="key-title" data-i18n="keys.title">Client API keys</h2>
+                <p class="help" data-i18n="keys.intro">Give each dictation client its own key. A key cannot open this console.</p>
+                <form id="key-form" class="stack">
+                  <label class="field" for="key-name"><span data-i18n="keys.name">Client name</span><input id="key-name" name="name" type="text" required autocomplete="off" aria-describedby="key-hint"></label>
+                  <p class="help" id="key-hint" data-i18n="keys.hint">For example, Dictation on my laptop.</p>
+                  <button class="primary" type="submit" id="key-create" data-i18n="keys.create">Create key</button>
+                </form>
+                <p id="key-notice" role="status"></p>
+                <p id="key-list-status" role="status" class="help"></p>
+                <button type="button" id="key-retry" data-i18n="head.retry" hidden>Try again</button>
+                <ul id="key-list" aria-labelledby="key-title"></ul>
+              </section>
               <div class="panel stack">
                 <h2 data-i18n="api.address">Server address</h2><label class="field"><span data-i18n="api.examples">Address for examples</span><input type="url" id="example-origin" autocomplete="off" spellcheck="false" aria-describedby="address-help address-error"></label>
                 <p id="address-help" class="help" data-i18n="api.addressHelp"></p>
@@ -208,7 +226,8 @@
               </div>
             </div>
             <div class="panel stack">
-              <h2 data-i18n="api.requests">Request examples</h2><label class="check"><input type="checkbox" id="example-key"><span data-i18n="api.bearer">Include a Bearer token variable</span></label>
+              <h2 data-i18n="api.requests">Request examples</h2><label class="check" id="example-key-option"><input type="checkbox" id="example-key"><span data-i18n="api.bearer">Include a Bearer token variable</span></label>
+              <p class="help" id="owner-example-hint" data-i18n="keys.variable" hidden>Set STT_API_KEY to the client key before running these examples.</p>
               <div class="snippet">
                 <div class="titleline"><strong>curl</strong><button class="copy" data-target="snip-curl" type="button" data-i18n="btn.copy">Copy</button>
                 </div><pre id="snip-curl"></pre>
@@ -229,7 +248,7 @@
                 <h2 id="state-detail">—</h2><button type="button" id="btn-stop" class="hidden" data-i18n="btn.stop">Stop</button>
               </div>
               <p id="stop-feedback" role="status" class="error"></p>
-              <div class="actions"><span id="key-badge" class="hidden" data-i18n="key.badge">Key required</span><button type="button" id="edit-key" data-i18n="key.edit">Set API key</button>
+              <div class="actions" id="legacy-access" hidden><span id="key-badge" class="hidden" data-i18n="key.badge">Key required</span><button type="button" id="edit-key" data-i18n="key.edit">Set API key</button>
               </div>
               <dl class="readout">
                 <div><dt data-i18n="status.readiness">Engine status</dt><dd id="ro-state">—</dd>
@@ -285,8 +304,26 @@
         </footer>
       </div>
     </div>
+    <dialog id="secret-dialog" aria-labelledby="secret-title" aria-describedby="secret-hint">
+      <div class="stack">
+        <h2 id="secret-title" data-i18n="keys.secretTitle">Save your key</h2>
+        <p id="secret-hint" data-i18n="keys.secretHint">Copy this key to your client now. You cannot view it again after closing this window.</p>
+        <code id="key-secret" dir="ltr"></code>
+        <div class="actions"><button type="button" class="copy primary" data-target="key-secret" id="key-copy" autofocus data-i18n="btn.copy">Copy</button><button type="button" id="key-dismiss" data-i18n="keys.close">Close</button></div>
+        <p role="status" id="key-copy-status"></p>
+      </div>
+    </dialog>
+    <dialog id="revoke-dialog" aria-labelledby="revoke-title" aria-describedby="revoke-description">
+      <div class="stack">
+        <h2 id="revoke-title" data-i18n="keys.revokeTitle">Revoke key?</h2>
+        <p id="revoke-description"></p>
+        <div class="actions"><button type="button" id="revoke-cancel" autofocus data-i18n="keys.cancel">Keep key</button><button type="button" id="revoke-confirm" data-i18n="keys.revoke">Revoke</button></div>
+        <p class="error" role="alert" id="revoke-error"></p>
+      </div>
+    </dialog>
     <div id="live" role="status" class="toast"></div>
     <script src="/static/i18n.js"></script>
+    <script src="/static/owner.js"></script>
     <script src="/static/app.js"></script>
   </body>
 </html>

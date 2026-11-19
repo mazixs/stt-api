@@ -19,13 +19,14 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.datastructures import UploadFile
 from starlette.types import Message, Receive, Scope, Send
 
-from .auth import require_api_key
+from .auth import require_client_key
 from .catalog import HEADS, openai_model_id
 from .errors import ApiError
 from .wavinfo import wav_duration_seconds
 from .webminfo import webm_duration_seconds
 
-router = APIRouter(dependencies=[Depends(require_api_key)])
+router = APIRouter(dependencies=[Depends(require_client_key)])
+native_router = APIRouter(dependencies=[Depends(require_client_key)])
 
 TRANSCRIBE_TIMEOUT = httpx.Timeout(None, connect=10.0)
 
@@ -318,7 +319,7 @@ async def _native_reload(
 # читателю схемы, а три метода на одном маршруте дают FastAPI повторяющийся
 # operation id и предупреждение при каждой сборке схемы. Родные эндпоинты движка
 # описаны в README, документация у них своя — апстримная.
-@router.api_route(
+@native_router.api_route(
     "/v1/{path:path}", methods=["GET", "POST", "DELETE"], include_in_schema=False
 )
 async def passthrough(request: Request, path: str) -> Response:

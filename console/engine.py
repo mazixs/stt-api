@@ -53,7 +53,7 @@ def build_argv(settings: Settings, cfg: EngineConfig) -> list[str]:
         settings.engine_host,
         "--port",
         str(settings.engine_port),
-        "--bind-all",
+        *([] if settings.owner_access else ["--bind-all"]),
         "--model-dir",
         str(settings.model_dir),
         "--model-variant",

@@ -285,3 +285,23 @@ th,td {text-align:start; padding:.5rem; border-bottom:1px solid var(--line); fon
 #compare-time-note {margin-top:calc(var(--gap) * -.5)}
 #connect-docs {display:flex; flex-wrap:wrap; align-items:center; gap:.25rem 1.2rem}
 #connect-docs a {display:inline-flex; align-items:center; min-height:var(--control)}
+
+/* Доступ владельца использует те же поля, кнопки и палитру, что и рабочая консоль. */
+.login-header {display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:1rem; padding:1rem var(--gutter); background:var(--rail); color:white}
+.login-header :focus-visible {outline-color:var(--signal)}
+.login-main,.session-check {inline-size:min(100%,32rem); margin-inline:auto; padding:clamp(2rem,7vh,5rem) var(--gutter)}
+.login-main form {gap:1.15rem; border:1px solid var(--line)}
+.login-page .brand {font-size:1.35rem}
+.session-check button {margin-block-start:.85rem}
+#key-list {list-style:none; padding:0; overflow-wrap:anywhere}
+#key-list:empty {display:none}
+#key-list li {padding-block:.75rem; border-block-start:1px solid var(--line)}
+#key-list li:last-child {padding-block-end:0}
+#key-list code {font-size:var(--meta); color:var(--sub)}
+#key-form .help {margin-block-start:-.45rem}
+dialog {color:var(--ink); background:var(--paper); inline-size:min(calc(100% - 2rem),30rem); max-block-size:calc(100% - 2rem); border:1px solid var(--edge); border-radius:.375rem; padding:var(--pad); overscroll-behavior:contain; overflow-wrap:anywhere}
+dialog::backdrop {background:rgb(25 27 26 / .57)}
+dialog .actions {margin:0}
+#key-secret {padding:.8rem; background:var(--tint); border-radius:.25rem; user-select:all}
+#owner-logout {flex-shrink:0}
+@media(max-width:34em){.login-header {padding-block:.65rem}.login-main {padding-block:2rem}}
