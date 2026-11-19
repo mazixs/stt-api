@@ -86,6 +86,11 @@ async def test_compare_disabled_by_default_and_requires_api_key(client_stopped, 
 
     settings.api_key = KEY
     assert (await client.get("/api/status", headers=AUTH)).json()["compare_enabled"] is True
+    # При отказе даже чтение аудио для запуска двух CLI еще не началось.
+    async def unexpected_read(*args, **kwargs):
+        pytest.fail("Сравнение открыло файл до проверки API-ключа")
+
+    monkeypatch.setattr(compare, "_read_audio", unexpected_read)
     error(await submit(client, headers={}), 401, "invalid_api_key")
     error(await submit(client, headers={"Authorization": "Bearer wrong"}), 401, "invalid_api_key")
 

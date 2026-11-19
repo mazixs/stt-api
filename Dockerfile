@@ -1,17 +1,12 @@
 # syntax=docker/dockerfile:1
 
-# The speech engine is not built here: we take the upstream binary from its published
-# image. The runtime base must stay debian:trixie-slim — that is what upstream builds
-# against, and the binary's onnxruntime statics need trixie's libstdc++.
-# Версия движка. Такое же значение стоит в `docker-compose.yml`, и меняются они одним
-# коммитом: здесь — запас для прямого `docker build`, там — то, что берёт compose.
+# Keep the direct-build default in sync with docker-compose.yml.
 ARG GIGASTT_TAG=2.22.0
 FROM ghcr.io/ekhodzitsky/gigastt:${GIGASTT_TAG} AS engine
 
+# The upstream binary needs trixie's libstdc++; it decodes audio without ffmpeg.
 FROM debian:trixie-slim
 
-# No ffmpeg, no torch, no CUDA: the engine decodes every format it accepts itself,
-# browser WebM/Opus included since 2.17.0, so the image stays small.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates curl procps \
     && rm -rf /var/lib/apt/lists/*

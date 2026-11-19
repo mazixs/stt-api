@@ -1,18 +1,11 @@
-# Наложение для разработки на своей машине. Запуск:
-#
-#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
-#   docker compose -f docker-compose.yml -f docker-compose.local.yml down
-#
-# Отличий от боевого ровно три, и все — про то, чтобы ноутбук не превращался в
-# сервер: контейнер не поднимается сам после перезагрузки, имя другое (чтобы
-# случайно не спутать с боевым в чужом `docker ps`), и значения читаются ещё и из
-# `.env.local`, который перебивает `.env`.
+# See README.md#development. Use a separate checkout for isolated data and models.
+name: stt-api-local
 services:
   stt-api:
+    image: stt-api-console:local
     container_name: stt-api-local
     restart: "no"
+    # Appends to the base service's .env; this affects container variables only.
     env_file:
-      - path: .env
-        required: false
       - path: .env.local
         required: false

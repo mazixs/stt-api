@@ -47,9 +47,20 @@ cp .env.example .env          # optional: without .env the defaults apply
 docker compose up -d
 ```
 
-Open `http://localhost:8091` on the Docker host. By default the port is bound to
-loopback. For remote access, use an SSH tunnel or set `HOST_BIND` to the intended
-network interface in `.env`, set a strong `API_KEY`, and use HTTPS for clients.
+Open `http://localhost:8091` on the Docker host. On Docker Engine 28 or later,
+the default loopback bind keeps this port off the LAN and the internet.
+[Older engines had a LAN exception](https://docs.docker.com/engine/network/port-publishing/).
+
+For access from another computer, keep the loopback bind and use an SSH tunnel,
+or put an HTTPS reverse proxy on the Docker host in front of `127.0.0.1:8091`.
+A browser needs trusted HTTPS to use the microphone from another device;
+`http://localhost` is an exception only on the machine running the browser.
+Before enabling remote access, set `API_KEY` in the `.env` next to
+`docker-compose.yml` and run `docker compose up -d --force-recreate --wait`.
+The running service does not reread `.env`. Check that an unauthenticated
+`GET http://127.0.0.1:8091/api/status` returns `401` before enabling the proxy.
+Keep the console behind a VPN or a trusted network: the same key allows both
+recognition and administration. Do not publish its HTTP port on the internet.
 
 Under **Models**, select **GigaAM v3 RNN-T
 end-to-end**, open its settings, and deploy it. Wait until the service is ready.
@@ -168,9 +179,10 @@ intermediate deltas are not the final text.
 
 ### What is exposed
 
-A non-empty `API_KEY` protects the API routes, except for `/health`. The web
-console itself is still served so you can enter the key. Comparison also requires
-an explicit opt-in.
+A non-empty `API_KEY` protects the API routes, except for `/health`. In **Service
+status → Set API key**, enter the key already configured on the server. This
+stores a copy in the current browser; it does not create or rotate the server's
+key. Comparison also requires an explicit opt-in.
 
 | Path | Behind the key | What it does |
 |---|---|---|
@@ -187,9 +199,10 @@ an explicit opt-in.
 | `GET /api/docs`, `/api/openapi.json` | yes | Swagger UI and the schema of the control API |
 | `GET /health` | no | Console liveness; returns `engine_detail_code`, not error text. See `/api/status` for `detail` |
 
-Use `Authorization: Bearer <key>` in API clients. The console uses a query parameter
-for the event stream and Swagger UI. These URLs may expose the key in browser history
-or proxy logs. Do not share them; configure the proxy not to log query strings.
+Use `Authorization: Bearer <key>` in API clients. Query authentication is accepted
+only on `GET /api/events`, `GET /api/docs`, and `GET /api/openapi.json` for the
+browser's event stream and Swagger UI. These URLs may expose the key in browser
+history or proxy logs. Do not share them or log their query strings.
 
 ## Glossary and the built-in brand dictionary
 
@@ -369,8 +382,12 @@ uv sync          # environment
 uv run pytest    # tests; the engine is stubbed out, nothing is downloaded
 ```
 
-Run the service on your own machine through the overlay - that way the container will
-not resurrect itself after a reboot and will not collide with production by name:
+The development overlay uses the `stt-api-local` Compose project and local image tag;
+it does not restart after reboot. To run one local instance alongside the base stack,
+use a separate checkout and an unused `HOST_PORT`: both configurations mount `data/`
+and `models/` from their checkout. The overlay is not meant to run multiple local
+instances. If an older overlay left a container named `stt-api-local`, stop and
+remove that local container before the first run.
 
 ```sh
 cp .env.local.example .env.local

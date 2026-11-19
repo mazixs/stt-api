@@ -18,6 +18,8 @@ const LANG_STORAGE = "stt_console_lang";
 const TEXT = {
   en: {
     "status.readiness": "Engine status",
+    "status.stopFailed": "Could not stop the engine. {reason}",
+    "status.stopConnection": "Check the service connection and try again.",
     "status.target": "Deployment target",
     "error.invalid_api_key": "Invalid or missing API key. Set the key in Service status.",
     "error.compare_busy": "Another comparison is running. Try again after it finishes.",
@@ -380,6 +382,8 @@ const TEXT = {
 
   ru: {
     "status.readiness": "Состояние движка",
+    "status.stopFailed": "Не удалось остановить движок. {reason}",
+    "status.stopConnection": "Проверьте соединение с сервисом и повторите попытку.",
     "status.target": "Цель развёртывания",
     "error.invalid_api_key": "Ключ отсутствует или не принят. Задайте его в разделе «Статус сервиса».",
     "error.compare_busy": "Уже идёт сравнение. Повторите после его завершения.",

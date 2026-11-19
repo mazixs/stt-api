@@ -147,9 +147,10 @@ async def test_local_engine_traffic_ignores_environment_proxy(client_ready, monk
 
 async def test_native_query_excludes_console_key_and_preserves_lists(client_ready_with_key):
     client = client_ready_with_key
-    response = await client.post("/v1/admin/reload", params=[
-        ("api_key", "secret"), ("option", "one"), ("option", "two"),
-    ])
+    response = await client.post(
+        "/v1/admin/reload", headers={"Authorization": "Bearer secret"},
+        params=[("api_key", "discard-me"), ("option", "one"), ("option", "two")],
+    )
     assert response.status_code == 200
     logs = client.app.state.bus.log_lines()
     assert any("/v1/admin/reload?option=one&option=two" in line for line in logs)

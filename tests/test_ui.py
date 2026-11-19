@@ -132,11 +132,6 @@ async def test_ui_advises_transliteration_and_never_lowercasing(client_ready):
     assert "Пишите строчными" not in texts
 
 
-async def test_sse_query_key_accepted(client_ready_with_key):
-    response = await client_ready_with_key.get("/api/status", params={"api_key": "secret"})
-    assert response.status_code == 200
-
-
 async def test_glossary_is_a_field_of_chips_with_import_and_export(client_ready):
     html = (await client_ready.get("/")).text
     js = (await client_ready.get("/static/app.js")).text
@@ -409,3 +404,66 @@ async def test_mobile_feedback_and_model_list_in_chrome(live_client):
             await pw.expect(page.locator("#model-response")).to_contain_text('"data"')
         finally:
             await browser.close()
+
+
+@pytest.fixture
+async def chrome_page(live_client):
+    pw = pytest.importorskip("playwright.async_api")
+    async with pw.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel="chrome")
+        try:
+            yield await browser.new_page(), pw.expect
+        finally:
+            await browser.close()
+
+
+async def test_stop_after_failed_deploy_and_retry_in_chrome(chrome_page, live_client, monkeypatch):
+    from console.state import EngineConfig
+
+    page, expect = chrome_page
+    supervisor = live_client.app.state.supervisor
+    await supervisor.deploy(EngineConfig())
+    await page.goto(str(live_client.base_url) + "/#models")
+    monkeypatch.setenv("FAKE_DOWNLOAD_SLOW", "0.6")
+    monkeypatch.setenv("FAKE_DOWNLOAD_FAIL", "disk")
+    await page.locator("#target-ml_ctc").check()
+    await page.locator('[data-page=models] a[href="#settings"]').click()
+    await page.locator("#btn-deploy").click()
+    await page.locator('#railnav a[href="#status"]').click()
+    await expect(page.locator("#state-pill")).to_have_attribute("data-state", "downloading")
+    stop = page.locator("#btn-stop")
+    await expect(stop).to_be_hidden()
+    await expect(page.locator("#state-pill")).to_have_attribute("data-state", "error")
+    await expect(stop).to_be_visible()
+    await expect(stop).to_be_enabled()
+    await page.route("**/api/stop", lambda r: r.fulfill(status=503, body="Unavailable"), times=1)
+    feedback = page.locator("#stop-feedback")
+    await stop.click()
+    await expect(feedback).to_have_text("Could not stop the engine. Error 503")
+    async with page.expect_response(lambda r: r.url.endswith("/api/status")):
+        pass  # Ждём следующего штатного опроса.
+    await expect(feedback).to_contain_text("503")
+    await page.locator(".rail [data-lang=ru]").click()
+    await expect(feedback).to_have_text("Не удалось остановить движок. Ошибка 503")
+    await stop.click()
+    await expect(page.locator("#state-pill")).to_have_attribute("data-state", "stopped")
+    await expect(stop).to_be_hidden()
+    await expect(feedback).to_be_empty()
+    assert not supervisor.process.is_running
+
+
+async def test_bearer_switch_discards_manual_copy_in_chrome(chrome_page, live_client):
+    page, expect = chrome_page
+    await page.add_init_script("Object.defineProperty(navigator, 'clipboard', {value: undefined})")
+    await page.goto(str(live_client.base_url) + "/#api")
+    await expect(page.locator("#state-pill")).to_have_attribute("data-state", "stopped")
+    bearer, copy = page.locator("#example-key"), page.locator('[data-target="snip-curl"]')
+    await bearer.check()
+    await copy.click()
+    manual = page.locator(".manual textarea")
+    assert "Authorization: Bearer" in await manual.input_value()
+    await bearer.uncheck()
+    await expect(manual).to_have_count(0)
+    await copy.click()
+    assert await manual.input_value() == await page.locator("#snip-curl").text_content()
+    assert "Authorization" not in await manual.input_value()

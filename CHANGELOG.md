@@ -35,7 +35,8 @@ at `/api/openapi.json` (`info.version`) read it from there.
 
 - The public `/health` response replaces the free-form `engine_detail` field with `engine_detail_code`. Diagnostic text remains available as `detail` in `/api/status`.
 - Transcription metrics no longer count a stream interrupted while reading the engine response as a successful run.
-- Docker Compose now binds the console to loopback by default. For direct network access, set `HOST_BIND` explicitly and configure an `API_KEY`.
+- Docker Compose now binds the console to loopback by default. For remote access, see the [Quick start](README.md#quick-start).
+- API clients must send the key as `Authorization: Bearer`. Query keys remain accepted only for `GET /api/events`, `GET /api/docs`, and `GET /api/openapi.json`.
 - The Kamerton web console uses a wide layout for dictation, comparison, API setup, model selection, startup settings, glossary, service status and the journal. Model selection is separate from deployment.
 - `README.md` is now the English one and the Russian text moved to `README.ru.md`; the
   two are cross-linked. The documents under `docs/` stay Russian only.
@@ -54,6 +55,9 @@ at `/api/openapi.json` (`info.version`) read it from there.
 
 ### Fixed
 
+- A failed model change no longer hides the stop button while the previous engine is running. A failed stop remains visible even after the status refreshes.
+- Changing the Bearer option clears the stale manual-copy field in API examples.
+- The local Compose overlay uses a separate project and image tag so it does not replace the base project's service or image.
 - Updated gigastt to [2.22.0](https://github.com/ekhodzitsky/gigastt/releases/tag/v2.22.0),
   which fixes WebM/Opus with a non-48 kHz header and improves long-file overlap
   stitching. See the [Docker smoke results](docs/manual-smoke.md#результат-проверки-gigastt-2220).

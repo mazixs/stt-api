@@ -63,6 +63,7 @@ async function api(path, options, retry) {
     } catch (err) {
       /* тело не JSON — оставляем код */
     }
+    error.status = response.status;
     throw error;
   }
   const type = response.headers.get("content-type") || "";
@@ -98,7 +99,7 @@ function renderStatus(status) {
   $("state-detail").textContent = detailText(status);
   $("ro-state").textContent = stateWord(status.status);
   $("ro-target").textContent = [status.deploying, status.status === "downloading" && Number.isFinite(status.download_percent) ? status.download_percent + "%" : ""].filter(Boolean).join(" · ") || "—";
-  $("btn-stop").classList.toggle("hidden", status.status !== "ready");
+  renderStop();
   $("key-badge").classList.toggle("hidden", !status.api_key_set);
 
   const engine = status.engine || {};
@@ -263,7 +264,7 @@ async function refreshStatus() {
     $("state-label").textContent = t("state.offline"); $("state-pill").dataset.state = "unknown";
     $("state-detail").textContent = err.message;
     for (const id of ["ro-state","ro-target","ro-variant","ro-elapsed","ro-rtf","ro-total","ro-restarts","ro-uptime","cur-median"]) $(id).textContent = "—";
-    $("btn-stop").classList.add("hidden"); $("env-diff").classList.add("hidden"); $("key-badge").classList.add("hidden");
+    renderStop(); $("env-diff").classList.add("hidden"); $("key-badge").classList.add("hidden");
     $("recent").classList.add("hidden"); $("recent-empty").hidden = true;
     renderAudio(); renderCompare(); renderSelection(); renderCurrent();
   }
@@ -369,13 +370,28 @@ async function deploy(variant) {
   finally { await refreshStatus(); deployPending = false; renderDeploying(state.status || {}); }
 }
 
+let stopPending = false, stopError = null;
+function canStop(status) {
+  return !!status?.engine?.running && ["ready", "error"].includes(status.status);
+}
+function renderStop() {
+  const button = $("btn-stop");
+  button.classList.toggle("hidden", !canStop(state.status));
+  button.disabled = stopPending || !canStop(state.status);
+  setText("stop-feedback", stopError ? t("status.stopFailed", {reason:stopError.message}) : "");
+}
 async function stopEngine() {
+  if (stopPending || !canStop(state.status)) return;
+  stopPending = true; renderStop();
   try {
     await api("/api/stop", { method: "POST" });
+    stopError = null;
   } catch (err) {
-    $("state-detail").textContent = err.message;
+    stopError = err instanceof LocalizedError ? err : err.status
+      ? new LocalizedError("api.error", {status:err.status}) : new LocalizedError("status.stopConnection");
+  } finally {
+    await refreshStatus(); stopPending = false; renderStop();
   }
-  await refreshStatus();
   await loadHeads();
 }
 
@@ -1061,7 +1077,7 @@ function localize() {
   applyStaticTexts(); localizedOptions(); renderRichTexts(); renderSnippets(); markLangButtons();
   showPage(); renderAudio(); renderGlossary(glossary.payload); renderJournal(); renderCompare(true);
   if (state.status) renderStatus(state.status);
-  else if (state.statusError) { setText("state-detail", state.statusError.message); setText("state-label", t("state.offline")); }
+  else if (state.statusError) { renderStop(); setText("state-detail", state.statusError.message); setText("state-label", t("state.offline")); }
 }
 function switchLang(next) {
   if (!setLang(next)) return;
@@ -1277,8 +1293,9 @@ function bindAudio() {
 function init() {
   $("service-models").ontoggle = readServiceModels;
   $("example-origin").value = location.origin;
-  $("example-origin").oninput = () => { document.querySelector(".manual")?.remove(); renderSnippets(); };
-  $("example-key").onchange = renderSnippets;
+  const updateExamples = () => { document.querySelector('[data-page="api"] .manual')?.remove(); renderSnippets(); };
+  $("example-origin").oninput = updateExamples;
+  $("example-key").onchange = updateExamples;
   $("reset-origin").onclick = () => { $("example-origin").value=location.origin; $("example-origin").oninput(); };
   $("mobile-nav").onchange = e => { location.hash = e.target.value; };
   document.querySelector(".skip").onclick = e => { e.preventDefault(); $("main").focus(); };
