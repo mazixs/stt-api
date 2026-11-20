@@ -1,0 +1,74 @@
+# Самостоятельный профиль: внешний Nginx Proxy Manager завершает HTTPS.
+name: kamerton-npm
+
+services:
+  stt-api:
+    build:
+      context: ${KAMERTON_BUILD_CONTEXT:-.}
+      target: app
+      args:
+        GIGASTT_TAG: ${GIGASTT_TAG:-2.22.0}
+    image: ${KAMERTON_IMAGE:-stt-api-console:npm}
+    pull_policy: never
+    init: true
+    stop_grace_period: 45s
+    restart: unless-stopped
+    ports:
+      - target: 8080
+        published: "${KAMERTON_PORT:-8812}"
+        host_ip: ${KAMERTON_BIND:?Specify the local IP to bind the NPM upstream port}
+        protocol: tcp
+    environment:
+      OWNER_ACCESS: "1"
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?Specify the exact public HTTPS origin}
+      TRUSTED_PROXY_IP: ${TRUSTED_PROXY_IP:?Specify the source IP seen by Kamerton for connections from NPM}
+      AUTOSTART: ${AUTOSTART:-1}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-150}
+      ENABLE_MODEL_COMPARE: ${ENABLE_MODEL_COMPARE:-0}
+      ENABLE_JOBS: ${ENABLE_JOBS:-0}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      HF_TOKEN: ${HF_TOKEN:-}
+    command: ["python", "-m", "uvicorn", "console.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080", "--no-proxy-headers", "--no-access-log", "--timeout-graceful-shutdown", "15"]
+    volumes:
+      - type: bind
+        source: ${KAMERTON_DATA_DIR:-./data}
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${KAMERTON_MODEL_DIR:-./models}
+        target: /models
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    mem_limit: 3g
+    memswap_limit: 3g
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  owner-cli:
+    profiles: [setup]
+    image: ${KAMERTON_IMAGE:-stt-api-console:npm}
+    pull_policy: never
+    entrypoint: ["python", "-m", "console.owner_cli"]
+    command: ["--help"]
+    restart: "no"
+    network_mode: none
+    healthcheck:
+      disable: true
+    environment:
+      DATA_DIR: /data
+    volumes:
+      - type: bind
+        source: ${KAMERTON_DATA_DIR:-./data}
+        target: /data
+        bind:
+          create_host_path: false

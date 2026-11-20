@@ -4,6 +4,10 @@
 .gitignore
 .env
 .env.*
+**/.env
+**/.env.*
+.kamerton/
+**/.kamerton/
 *.pem
 *.key
 *.p12
@@ -11,6 +15,8 @@ secrets.*
 secrets/
 data/
 models/
+**/data/
+**/models/
 *.wav
 *.webm
 *.mp3
