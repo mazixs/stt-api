@@ -174,8 +174,10 @@ def test_window_concurrency_flag_appears_only_when_asked(console_settings):
     serial = build_argv(console_settings, cfg())
     assert "--file-window-concurrency" not in serial
 
-    parallel = build_argv(console_settings, cfg(file_window_concurrency=2))
+    parallel = build_argv(console_settings, cfg(variant="ml_ctc", pool_size=2, file_window_concurrency=2))
     assert parallel[parallel.index("--file-window-concurrency") + 1] == "2"
+    with pytest.raises(EngineStartupError, match="размер пула"):
+        build_argv(console_settings, cfg(file_window_concurrency=2))
 
 
 def test_window_concurrency_of_one_leaves_argv_byte_identical(console_settings):

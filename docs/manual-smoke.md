@@ -88,7 +88,9 @@ watch -n5 "curl -s localhost:8091/api/status | python3 -m json.tool | head -5"
 curl -sLO https://cdn.chatwm.opensmodel.sberdevices.ru/GigaAM/example.wav       # 11.3 с
 curl -sLO https://cdn.chatwm.opensmodel.sberdevices.ru/GigaAM/long_example.wav  # 71.2 с
 
-curl -s -X POST localhost:8091/v1/audio/transcriptions -F model=whisper-1 -F file=@example.wav
+curl -s localhost:8091/v1/models    # один id: kamerton; variant совпадает с /api/status
+curl -s -X POST localhost:8091/v1/audio/transcriptions -F model=kamerton -F file=@example.wav
+curl -s -X POST localhost:8091/v1/audio/transcriptions -F model=whisper-1 -F file=@example.wav  # совместимость
 curl -s -X POST localhost:8091/api/test -F file=@example.wav
 curl -s -X POST localhost:8091/api/test -F file=@long_example.wav
 ```
@@ -156,7 +158,7 @@ h = b'RIFF' + struct.pack('<I', 36+len(d)) + b'WAVEfmt ' + struct.pack('<IHHIIHH
 pathlib.Path('limit.wav').write_bytes(h+d)"
 
 curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8091/v1/audio/transcriptions \
-  -F model=whisper-1 -F file=@limit.wav                      # ожидается 200
+  -F model=kamerton -F file=@limit.wav                       # ожидается 200
 
 docker compose exec stt-api sh -c 'ps -eo args | grep "[g]igastt serve"' \
   | tr ' ' '\n' | grep -A1 body-limit             # ожидается (MB + 1) * 1048576

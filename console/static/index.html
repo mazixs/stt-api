@@ -106,6 +106,10 @@
             </aside>
           </section>
           <section data-page="compare" class="sections" hidden aria-labelledby="heading">
+            <div class="panel stack compare-setting">
+              <label class="check"><input type="checkbox" id="compare-enabled" disabled aria-describedby="compare-toggle-note"><strong data-i18n="compare.toggle">Allow model comparison</strong></label>
+              <p class="help" id="compare-toggle-note"></p><p class="error" role="status" id="compare-toggle-error"></p>
+            </div>
             <p role="status" id="compare-availability"></p>
             <form id="compare-form" hidden>
               <div class="selectrow"><label class="field"><span data-i18n="compare.first">First model</span><select id="model-a" required></select></label><label class="field"><span data-i18n="compare.second">Second model</span><select id="model-b" required></select></label>
@@ -146,19 +150,24 @@
               <fieldset id="config-editor" class="cfgfields" disabled>
                 <fieldset>
                   <legend data-i18n="settings.text">Text formatting</legend>
-                  <div class="stack"><label class="field"><span data-i18n="opt.punctuation">Punctuation and casing</span><select id="opt-punctuation"></select></label><label class="field"><span data-i18n="opt.itn">Numbers as digits</span><select id="opt-itn"></select></label>
+                  <div class="stack">
+                    <div class="setting"><label for="opt-punctuation" data-i18n="opt.punctuation"></label><select id="opt-punctuation" aria-describedby="punctuation-note"></select><p class="help" id="punctuation-note"></p></div>
+                    <div class="setting"><label for="opt-itn" data-i18n="opt.itn"></label><select id="opt-itn" aria-describedby="itn-note"></select><p class="help" id="itn-note"></p></div>
                   </div>
                 </fieldset>
                 <fieldset>
                   <legend data-i18n="settings.audio">Audio processing</legend>
-                  <div class="stack"><label class="field"><span data-i18n="opt.vad">Silence skipping</span><select id="opt-vad"></select></label><label class="field"><span data-i18n="opt.pool">Concurrent recognitions</span><select id="opt-pool" aria-describedby="pool-note"></select></label>
-                    <p class="help" id="pool-note" data-i18n="opt.pool.note"></p><label class="field"><span data-i18n="opt.window">File windows at once</span><select id="opt-window-concurrency" aria-describedby="opt-window-note"></select></label>
-                    <p class="help" id="opt-window-note"></p>
+                  <div class="stack">
+                    <div class="setting"><label for="opt-vad" data-i18n="opt.vad"></label><select id="opt-vad" aria-describedby="vad-note"></select><p class="help" id="vad-note"></p></div>
+                    <div class="setting"><label for="opt-pool" data-i18n="opt.pool"></label><select id="opt-pool" aria-describedby="pool-note"></select><p class="help" id="pool-note"></p></div>
+                    <div class="setting"><label for="opt-window-concurrency" data-i18n="opt.window"></label><select id="opt-window-concurrency" aria-describedby="window-note"></select><p class="help" id="window-note"></p></div>
                   </div>
                 </fieldset>
                 <fieldset>
                   <legend data-i18n="settings.hints">Vocabulary hints</legend>
-                  <div class="stack"><label class="field"><span data-i18n="opt.hotwordsDefault">Built-in brand dictionary</span><select id="opt-hotwords-default"></select></label><label class="field"><span data-i18n="opt.boost">Glossary hint strength</span><input type="number" id="opt-boost" min="0" max="50" step="any" inputmode="decimal" required></label>
+                  <div class="stack">
+                    <div class="setting"><label for="opt-hotwords-default" data-i18n="opt.hotwordsDefault"></label><select id="opt-hotwords-default" aria-describedby="dictionary-note"></select><p class="help" id="dictionary-note"></p></div>
+                    <div class="setting"><label for="opt-boost" data-i18n="opt.boost"></label><input id="opt-boost" aria-describedby="boost-note" type="number" min="0" max="50" step="any" inputmode="decimal" required><p class="help" id="boost-note"></p></div>
                   </div>
                 </fieldset>
               </fieldset>
@@ -169,34 +178,45 @@
             <div id="env-diff" class="env-diff hidden">
               <h2 data-i18n="env.title">Different .env settings</h2>
               <ul id="env-diff-list">
-              </ul><button id="btn-deploy-env" type="button" data-i18n="env.deploy">Deploy with .env settings</button>
+              </ul><button id="btn-deploy-env" type="button" aria-describedby="env-error" data-i18n="env.deploy">Deploy with .env settings</button>
+              <p id="env-error" class="error" role="status"></p>
             </div>
           </section>
-          <section data-page="glossary" class="panelgrid" hidden aria-labelledby="heading">
+          <section data-page="glossary" class="sections" hidden aria-labelledby="heading">
             <div class="panel stack">
               <div class="titleline">
-                <h2 data-i18n="glossary.phrases">Phrases</h2><span class="pill" id="glossary-count">—</span>
+                <h2 id="phrases-title" data-i18n="glossary.phrases">Phrases</h2><span class="pill" id="glossary-count">—</span>
               </div>
+              <p class="help" id="glossary-intro"></p>
               <fieldset id="glossary-editor" disabled>
-                <div id="tags"><span id="tag-list"></span><span class="tag-entry"><input type="text" id="add-phrase" spellcheck="false" autocomplete="off" data-i18n-placeholder="glossary.placeholder" data-i18n-aria="glossary.addAria"><button type="button" id="btn-add" data-i18n="glossary.add">Add</button></span>
+                <div id="tags"><label for="add-phrase" data-i18n="glossary.addAria"></label><span class="tag-entry"><input type="text" id="add-phrase" spellcheck="false" autocomplete="off" data-i18n-aria="glossary.addAria"><button type="button" id="btn-add" data-i18n="glossary.add">Add</button></span>
                 </div>
+                <div class="actions"><button class="primary" type="button" id="btn-glossary" disabled data-i18n="btn.apply">Apply</button><label class="filepick"><span data-i18n="btn.import">Import</span><input type="file" id="glossary-file" accept=".txt,.csv,text/plain,text/csv" data-i18n-aria="btn.import"></label><button type="button" id="btn-export" data-i18n="btn.export">Export</button>
+                </div>
+                <ul id="tag-list" aria-labelledby="phrases-title"></ul>
                 <p id="glossary-reach"></p>
                 <p id="dropped-hint" class="help"></p>
                 <div id="glossary-issues">
                 </div>
                 <p id="glossary-env" class="hidden"><span id="glossary-env-text"></span> <button type="button" id="btn-glossary-env" data-i18n="glossary.envAdd">Add from .env</button></p>
-                <div class="actions"><button class="primary" type="button" id="btn-glossary" disabled data-i18n="btn.apply">Apply</button><label class="filepick"><span data-i18n="btn.import">Import</span><input type="file" id="glossary-file" accept=".txt,.csv,text/plain,text/csv" data-i18n-aria="btn.import"></label><button type="button" id="btn-export" data-i18n="btn.export">Export</button>
-                </div>
               </fieldset>
               <p role="status" id="glossary-hint"></p><button type="button" id="glossary-retry" data-i18n="head.retry" hidden>Try again</button>
-            </div>
-            <div class="panel stack">
-              <h2 data-i18n="glossary.guide">When to add a phrase</h2>
-              <p class="help" id="glossary-intro"></p>
             </div>
           </section>
           <section data-page="api" hidden class="apiwork panelgrid" aria-labelledby="heading">
             <div class="stack">
+              <section class="panel stack">
+                <h2 data-i18n="api.clientSettings">Client settings</h2>
+                <div class="field"><label for="base-url">Base URL</label>
+                  <div class="copy-row"><input type="url" id="base-url" autocomplete="off" spellcheck="false" dir="ltr" required aria-describedby="address-help address-error"><button type="button" class="copy" data-target="base-url" data-i18n-aria="api.copyBase"><svg class="ico" aria-hidden="true"><use href="#i-copy"/></svg><span data-i18n="btn.copy">Copy</span></button></div>
+                </div>
+                <p id="address-help" class="help" data-i18n="api.addressHelp"></p>
+                <p role="status" id="address-error" class="error"></p><button type="button" class="soft" id="reset-origin" data-i18n="api.reset">Use this service</button>
+                <div class="field"><span data-i18n="api.modelId">Model ID</span><div class="copy-row"><code id="client-model">kamerton</code><button type="button" class="copy" data-target="client-model" data-i18n-aria="api.copyModel"><svg class="ico" aria-hidden="true"><use href="#i-copy"/></svg><span data-i18n="btn.copy">Copy</span></button></div></div>
+                <p class="help" id="connect-intro"></p>
+                <div id="connect-docs"><a id="link-docs" href="/api/docs" target="_blank" rel="noreferrer" data-i18n="connect.swagger">Swagger at /api/docs</a></div>
+                <details class="snippet" id="service-models"><summary data-i18n="api.currentModels">Models on this service</summary><pre id="model-response" role="status"></pre></details>
+              </section>
               <section class="panel stack" id="owner-keys" aria-labelledby="key-title" hidden>
                 <h2 id="key-title" data-i18n="keys.title">Client API keys</h2>
                 <p class="help" data-i18n="keys.intro">Give each dictation client its own key. A key cannot open this console.</p>
@@ -210,20 +230,6 @@
                 <button type="button" id="key-retry" data-i18n="head.retry" hidden>Try again</button>
                 <ul id="key-list" aria-labelledby="key-title"></ul>
               </section>
-              <div class="panel stack">
-                <h2 data-i18n="api.address">Server address</h2><label class="field"><span data-i18n="api.examples">Address for examples</span><input type="url" id="example-origin" autocomplete="off" spellcheck="false" aria-describedby="address-help address-error"></label>
-                <p id="address-help" class="help" data-i18n="api.addressHelp"></p>
-                <p role="status" id="address-error" class="error"></p><button type="button" class="soft" id="reset-origin" data-i18n="api.reset">Use this service</button>
-              </div>
-              <div class="panel stack">
-                <h2>OpenAI Base URL</h2>
-                <div class="actions"><code id="base-url"></code><button type="button" class="copy" data-target="base-url" data-i18n="btn.copy">Copy</button>
-                </div>
-                <p class="help" id="connect-intro"></p>
-                <div id="connect-docs"><a id="link-docs" href="/api/docs" target="_blank" rel="noreferrer" data-i18n="connect.swagger">Swagger at /api/docs</a>
-                </div>
-                <details class="snippet" id="service-models"><summary data-i18n="api.currentModels">Models on this service</summary><pre id="model-response" role="status"></pre></details>
-              </div>
             </div>
             <div class="panel stack">
               <h2 data-i18n="api.requests">Request examples</h2><label class="check" id="example-key-option"><input type="checkbox" id="example-key"><span data-i18n="api.bearer">Include a Bearer token variable</span></label>
@@ -308,8 +314,12 @@
       <div class="stack">
         <h2 id="secret-title" data-i18n="keys.secretTitle">Save your key</h2>
         <p id="secret-hint" data-i18n="keys.secretHint">Copy this key to your client now. You cannot view it again after closing this window.</p>
-        <code id="key-secret" dir="ltr"></code>
-        <div class="actions"><button type="button" class="copy primary" data-target="key-secret" id="key-copy" autofocus data-i18n="btn.copy">Copy</button><button type="button" id="key-dismiss" data-i18n="keys.close">Close</button></div>
+        <dl class="credentials">
+          <div><dt>Base URL</dt><dd class="copy-row"><code id="key-base" dir="ltr"></code><button type="button" class="copy" data-target="key-base" data-i18n-aria="api.copyBase"><svg class="ico" aria-hidden="true"><use href="#i-copy"/></svg><span data-i18n="btn.copy">Copy</span></button></dd></div>
+          <div><dt data-i18n="api.apiKey">API key</dt><dd class="copy-row"><code id="key-secret" dir="ltr"></code><button type="button" class="copy" data-target="key-secret" id="key-copy" autofocus data-i18n-aria="api.copyKey"><svg class="ico" aria-hidden="true"><use href="#i-copy"/></svg><span data-i18n="btn.copy">Copy</span></button></dd></div>
+          <div><dt data-i18n="api.modelId">Model ID</dt><dd class="copy-row"><code id="key-model" dir="ltr">kamerton</code><button type="button" class="copy" data-target="key-model" data-i18n-aria="api.copyModel"><svg class="ico" aria-hidden="true"><use href="#i-copy"/></svg><span data-i18n="btn.copy">Copy</span></button></dd></div>
+        </dl>
+        <div class="actions"><button type="button" class="primary" id="key-dismiss" data-i18n="keys.close">Close</button></div>
         <p role="status" id="key-copy-status"></p>
       </div>
     </dialog>

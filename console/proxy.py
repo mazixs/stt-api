@@ -12,15 +12,16 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
+from unicodedata import category
 
 import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from starlette.datastructures import UploadFile
+from starlette.datastructures import FormData, UploadFile
 from starlette.types import Message, Receive, Scope, Send
 
 from .auth import require_client_key
-from .catalog import HEADS, openai_model_id
+from .catalog import PUBLIC_MODEL_ID
 from .errors import ApiError
 from .wavinfo import wav_duration_seconds
 from .webminfo import webm_duration_seconds
@@ -97,7 +98,7 @@ async def _bounded_request(request: Request, body_limit: int) -> AsyncIterator[R
 
 
 @asynccontextmanager
-async def parse_upload(request: Request) -> AsyncIterator[tuple[UploadFile, dict[str, str]]]:
+async def parse_upload(request: Request) -> AsyncIterator[tuple[UploadFile, FormData]]:
     limit = request.app.state.settings.max_upload_bytes
     async with _bounded_request(request, limit + 8192) as bounded:
         form = await bounded.form()
@@ -106,16 +107,40 @@ async def parse_upload(request: Request) -> AsyncIterator[tuple[UploadFile, dict
             raise ApiError(400, "Не передан аудиофайл в поле file.", "missing_file")
         if upload.size is not None and upload.size > limit:
             raise ApiError(413, _too_big(limit), "file_too_large")
-        fields = {k: v for k, v in form.multi_items() if k != "file" and isinstance(v, str)}
-        yield upload, fields
+        yield upload, form
 
 
-async def read_upload(request: Request) -> tuple[bytes, str, str, dict[str, str]]:
-    async with parse_upload(request) as (upload, fields):
+TIMESTAMP_GRANULARITIES = frozenset({"timestamp_granularities", "timestamp_granularities[]"})
+
+
+def upload_basename(filename: str | None) -> str:
+    # Учитываем оба разделителя независимо от ОС клиента. Имя нигде не служит путём.
+    name = (filename or "").replace("\\", "/").rsplit("/", 1)[-1]
+    name = "".join(char for char in name if category(char) not in {"Cc", "Cf"})
+    return name if name.strip() and name.strip() not in {".", ".."} else ""
+
+
+async def read_upload(request: Request) -> tuple[bytes, str, str, list[tuple[str, str]]]:
+    async with parse_upload(request) as (upload, form):
+        scalars, granularities = {}, []
+        for key, value in form.multi_items():
+            if key == "file" or not isinstance(value, str):
+                continue
+            if key in TIMESTAMP_GRANULARITIES:
+                granularities.append((key, value))
+            else:
+                scalars[key] = value
         return (
-            await upload.read(), upload.filename or "audio.wav",
-            upload.content_type or "application/octet-stream", fields,
+            await upload.read(), upload_basename(upload.filename),
+            upload.content_type or "application/octet-stream", [*scalars.items(), *granularities],
         )
+
+
+def multipart_upload_parts(
+    data: bytes, filename: str, content_type: str, fields: list[tuple[str, str]],
+) -> list[tuple[str, tuple[None, str] | tuple[str, bytes, str]]]:
+    # Последовательность частей сохраняет порядок повторений и обоих имён поля.
+    return [*((key, (None, value)) for key, value in fields), ("file", (filename or "audio", data, content_type))]
 
 
 def upload_duration_seconds(data: bytes) -> float | None:
@@ -205,8 +230,7 @@ async def forward_transcription(
     engine_request = client.build_request(
         "POST",
         f"{settings.engine_base_url}{path}",
-        data=fields,
-        files={"file": (filename, data, content_type)},
+        files=multipart_upload_parts(data, filename, content_type, fields),
     )
     try:
         response = await client.send(engine_request, stream=True)
@@ -233,7 +257,7 @@ async def forward_transcription(
         for key, value in response.headers.items()
         if key.lower() not in HOP_BY_HOP
     }
-    ignored = ignored_field_headers(fields)
+    ignored = ignored_field_headers(dict(fields))
     if ignored:
         _warn_once(request, ignored["X-Ignored-Fields"])
     headers.update(ignored)
@@ -260,28 +284,16 @@ async def models(request: Request) -> dict[str, Any]:
     supervisor = request.app.state.supervisor
     current = supervisor.current
     created = int(time.time())
-    data = [
-        {
-            "id": openai_model_id(head.id),
-            "object": "model",
-            "created": created,
-            "owned_by": "gigaam",
-            "deployed": current is not None and current.variant == head.id,
-        }
-        for head in HEADS.values()
-    ]
-    # Clients that hardcode a Whisper model name still work: the engine ignores the
-    # `model` field and serves whatever head is deployed.
-    data.append(
-        {
-            "id": "whisper-1",
-            "object": "model",
-            "created": created,
-            "owned_by": "gigaam",
-            "deployed": current is not None,
-        }
-    )
-    return {"object": "list", "data": data}
+    # `model` в запросе остаётся совместимым со старыми клиентами: движок
+    # принимает поле, но обслуживает запрос уже развёрнутой головой.
+    return {"object": "list", "data": [{
+        "id": PUBLIC_MODEL_ID,
+        "object": "model",
+        "created": created,
+        "owned_by": "gigaam",
+        "variant": current.variant if current else None,
+        "deployed": current is not None and supervisor.status == "ready",
+    }]}
 
 
 def _passthrough_headers(response: httpx.Response) -> dict[str, str]:

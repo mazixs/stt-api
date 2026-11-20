@@ -319,7 +319,7 @@ async def test_two_keys_wav_no_restart_no_secrets_to_engine(owner, monkeypatch):
     assert len(spawned) >= 2 and all(not set(secrets_env).intersection(env) for env in spawned)
     login_result = await login(client)
     csrf = {"Origin": ORIGIN, "X-CSRF-Token": login_result.json()["csrf_token"]}
-    settings.enable_model_compare = True
+    assert (await client.put("/api/settings/compare", headers=csrf, json={"enabled": True})).json() == {"enabled": True}
     assert (await client.get("/api/status")).json()["compare_enabled"] is True
     assert (await client.post("/api/compare", headers=csrf)).json()["error"]["code"] == "missing_file"
     a, b = [(await client.post("/api/keys", json={"name": n}, headers=csrf)).json() for n in ["A", "B"]]
@@ -343,6 +343,30 @@ async def test_two_keys_wav_no_restart_no_secrets_to_engine(owner, monkeypatch):
         assert (await transcribe(b)).status_code == 200
     assert supervisor.process.pid == pid and len(sent) == 3
     assert all(not req.url.query and not {"cookie", "authorization", "x-csrf-token"}.intersection(req.headers) for req in sent)
+
+
+async def test_compare_setting_requires_owner_origin_csrf_and_non_url_auth(owner):
+    client, app = owner
+    path = "/api/settings/compare"
+    payload = {"enabled": True}
+    assert (await client.put(path, json=payload)).status_code == 401
+    result = await login(client)
+    csrf = {"Origin": ORIGIN, "X-CSRF-Token": result.json()["csrf_token"]}
+    key = (await client.post("/api/keys", json={"name": "client"}, headers=csrf)).json()["key"]
+    async with http(app) as machine:
+        bearer = {"Authorization": f"Bearer {key}", **csrf}
+        assert (await machine.put(path, headers=bearer, json=payload)).status_code == 401
+    for headers, code in (
+        ({"Origin": ORIGIN}, "invalid_csrf"),
+        ({**csrf, "X-CSRF-Token": "wrong"}, "invalid_csrf"),
+        ({**csrf, "Origin": "https://another.test"}, "invalid_origin"),
+    ):
+        refused = await client.put(path, headers=headers, json=payload)
+        assert refused.status_code == 403 and refused.json()["error"]["code"] == code
+    assert (await client.put(path, headers=csrf, params={"api_key": key}, json=payload)).status_code == 400
+    assert (await client.get("/api/status")).json()["compare_enabled"] is False
+    assert (await client.put(path, headers=csrf, json=payload)).json() == payload
+    assert (await client.get("/api/status")).json()["compare_enabled"] is True
 
 
 async def test_storage_lost_while_serving(owner):

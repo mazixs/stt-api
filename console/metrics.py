@@ -19,7 +19,9 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
+Source = Literal["api", "file", "microphone"]
 WINDOW = 20
 RECENT = 8
 # Перцентиль по трём замерам — это не перцентиль, а случайное число из трёх: индекс
@@ -36,10 +38,12 @@ class Sample:
     audio_seconds: float | None
     elapsed: float
     at: float
+    source: Source
 
     def to_dict(self) -> dict[str, object]:
         return {
             "name": self.name,
+            "source": self.source,
             "audio_seconds": round(self.audio_seconds, 2) if self.audio_seconds else None,
             "elapsed": round(self.elapsed, 3),
             "rtf": round(self.elapsed / self.audio_seconds, 3)
@@ -60,13 +64,16 @@ class Metrics:
         self._total_elapsed = 0.0
         self._load()
 
-    def record(self, audio_seconds: float | None, elapsed: float, name: str = "") -> None:
+    def record(self, audio_seconds: float | None, elapsed: float, name: str = "", *, source: Source = "api") -> None:
         self._elapsed.append(elapsed)
         if audio_seconds and audio_seconds > 0:
             self._rtf.append(elapsed / audio_seconds)
             self._total_audio += audio_seconds
         self._recent.appendleft(
-            Sample(name=name or "без имени", audio_seconds=audio_seconds, elapsed=elapsed, at=time.time())
+            Sample(
+                name=name or "без имени", audio_seconds=audio_seconds, elapsed=elapsed,
+                at=time.time(), source=source,
+            )
         )
         self._total_files += 1
         self._total_elapsed += elapsed

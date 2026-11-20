@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import httpx
 import pytest
@@ -35,6 +36,39 @@ async def test_deploy_downloads_starts_and_reaches_ready(supervisor, console_set
     stored = StateFile(console_settings.state_path).load()
     assert stored.status == "ready"
     assert stored.last_good.variant == "rnnt"
+
+
+async def test_restore_legacy_windows_above_pool_without_breaking_startup(console_settings, bus):
+    state_file = StateFile(console_settings.state_path)
+    old_config = cfg(variant="ml_ctc", file_window_concurrency=4)
+    state_file.save(State(desired=old_config, last_good=old_config))
+    supervisor = Supervisor(console_settings, bus)
+    try:
+        await supervisor.restore_on_boot()
+        assert supervisor.status == "ready"
+        assert supervisor.current == cfg(variant="ml_ctc")
+        stored = state_file.load()
+        assert stored.desired == stored.last_good == supervisor.current
+        assert any("уменьшено" in line for line in bus.log_lines())
+    finally:
+        await supervisor.shutdown()
+
+
+@pytest.mark.parametrize("damaged", ["desired", "last_good"])
+async def test_restore_uses_valid_config_if_other_is_damaged(console_settings, bus, damaged):
+    expected = cfg(variant="e2e_rnnt", pool_size=2, file_window_concurrency=2)
+    payload = {"desired": expected.to_dict(), "last_good": expected.to_dict()}
+    payload[damaged]["pool_size"] = "2"
+    console_settings.state_path.parent.mkdir(parents=True)
+    console_settings.state_path.write_text(json.dumps(payload), encoding="utf-8")
+    loaded = StateFile(console_settings.state_path).load()
+    assert getattr(loaded, damaged) is None
+    supervisor = Supervisor(console_settings, bus)
+    try:
+        await supervisor.restore_on_boot()
+        assert supervisor.status == "ready" and supervisor.current == expected
+    finally:
+        await supervisor.shutdown()
 
 
 async def test_deploy_publishes_status_events(supervisor, bus):

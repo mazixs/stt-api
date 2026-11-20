@@ -186,8 +186,7 @@ function renderEnvDiff(env) {
   const box = $("env-diff");
   const diverges = (env && env.diverges) || {};
   const names = Object.keys(diverges);
-  box.classList.toggle("hidden", !names.length);
-  if (!names.length) return;
+  box.classList.toggle("hidden", !names.length && !envWindowConflict(env?.config));
   const list = $("env-diff-list");
   list.textContent = "";
   names.forEach((name) => {
@@ -200,17 +199,17 @@ function renderEnvDiff(env) {
     });
     list.appendChild(li);
   });
-  $("btn-deploy-env").disabled = deployBusy(state.status && state.status.status);
 }
 
+function envWindowConflict(cfg) {
+  return cfg && cfg.file_window_concurrency > cfg.pool_size;
+}
 async function deployFromEnv() {
-  const env = state.status && state.status.env && state.status.env.config;
-  if (!env) return;
-  state.configDirty = false;
-  applyDefaults(env);
-  state.configDirty = true;
-  renderSelection();
-  await deploy(env.variant);
+  const config = state.status?.env?.config;
+  if (!config || envWindowConflict(config)) return;
+  // Применяем точное содержимое .env, включая параметры, неактивные в редакторе.
+  // До подтверждения сервера черновик формы остаётся нетронутым.
+  await deploy(config, true);
 }
 
 /* POOL_SIZE в .env допускает до 8, а в разметке перечислены 1-4: значение, которого
@@ -235,7 +234,9 @@ function renderRecent(metrics) {
   rows.textContent = "";
   recent.forEach((item) => {
     const tr = document.createElement("tr");
-    tr.appendChild(cell(item.name, "name"));
+    const name = cell(item.name, "name");
+    if (["microphone", "file", "api"].includes(item.source)) name.append(el("small", t("source." + item.source), "source-kind"));
+    tr.appendChild(name);
     tr.appendChild(cell(item.audio_seconds
       ? t("unit.seconds", { value: item.audio_seconds.toFixed(1) }) : "—"));
     tr.appendChild(cell(t("unit.seconds", { value: item.elapsed.toFixed(2) })));
@@ -285,7 +286,7 @@ function applyDefaults(defaults) {
   setSelectValue($("opt-pool"), String(defaults.pool_size));
   $("opt-hotwords-default").value = String(defaults.hotwords_default);
   $("opt-boost").value = String(defaults.hotwords_boost);
-  setSelectValue($("opt-window-concurrency"), String(defaults.file_window_concurrency));
+  setSelectValue($("opt-window-concurrency"), String(defaults.file_window_concurrency ?? 1));
 }
 
 async function refreshStatus() {
@@ -366,24 +367,43 @@ function renderSelection() {
     $("head-badge").textContent = head.badge || "";
     $("head-note").textContent = head.badge_note || "";
   }
+  renderSettingHints();
   renderDeploying(state.status || {});
+}
+
+function renderSettingHints() {
+  const pool = Number($("opt-pool").value) || 1, windows = $("opt-window-concurrency");
+  for (const option of windows.options) option.disabled = Number(option.value) > pool;
+  if (Number(windows.value) > pool) windows.value = String(pool);
+  windows.disabled = pool === 1;
+  const noHints = glossary.loaded && !glossary.applied && $("opt-hotwords-default").value === "false";
+  $("opt-boost").disabled = noHints;
+  for (const key of ["punctuation", "itn"]) {
+    const auto = state.selected === "rnnt" ? "autoOn" : state.selected === "e2e_rnnt" ? "native" : "autoOff";
+    setText(key + "-note", [t("opt." + key + ".note"), state.selected && t("opt." + key + "." + auto)].filter(Boolean).join(" "));
+  }
+  for (const key of ["vad", "pool", "dictionary"]) setText(key + "-note", t("opt." + key + ".note"));
+  setText("window-note", t(windows.disabled ? "opt.window.locked" : "opt.window.note", {pool}));
+  setText("boost-note", t(noHints ? "opt.boost.locked" : "opt.boost.note"));
 }
 
 function draftConfig() {
   return {variant: state.selected, punctuation: $("opt-punctuation").value, itn: $("opt-itn").value,
     vad: $("opt-vad").value === "true", pool_size: Number($("opt-pool").value),
-    file_window_concurrency: Number($("opt-window-concurrency").value), hotwords_boost: $("opt-boost").valueAsNumber,
+    file_window_concurrency: Number($("opt-window-concurrency").value), ...(!$("opt-boost").disabled && {hotwords_boost: $("opt-boost").valueAsNumber}),
     hotwords_default: $("opt-hotwords-default").value === "true"};
 }
-let clickedTarget = null, deployPending = false, deployError = "", rollbackStatus = null;
+let clickedTarget = null, deployPending = false, deployError = "", envError = null, rollbackStatus = null;
 const isRollback = (status) => String(status.detail_code || "").indexOf("rollback.") === 0;
 function renderDeploying(status) {
   const busy = deployBusy(status.status), progress = $("deploy-progress");
   $("config-editor").disabled = !state.hydrated || !status.defaults;
   $("btn-deploy").disabled = !status.defaults || !state.heads.has(state.selected) || busy || deployPending;
-  $("btn-deploy-env").disabled = busy || deployPending;
+  const env = status.env?.config, conflict = envWindowConflict(env);
+  $("btn-deploy-env").disabled = busy || deployPending || !env || !!conflict;
+  setText("env-error", conflict ? t("env.windowsConflict", {windows:env.file_window_concurrency, pool:env.pool_size}) : envError?.message || "");
   $("btn-deploy").textContent = t(state.selected && state.selected === status.engine?.variant ? "head.redeploy" : "head.deploy");
-  $("draft-note").textContent = state.configDirty ? t("settings.draft") : "";
+  $("draft-note").textContent = !status.defaults ? state.statusError?.message || t("audio.awaitStatus") : state.configDirty ? t("settings.draft") : "";
   if (status.status === "ready" && clickedTarget && isRollback(status)) rollbackStatus = status;
   const phase = busy ? detailText(status) : "";
   const pct = status.status === "downloading" && Number.isFinite(status.download_percent) ? status.download_percent : null;
@@ -393,12 +413,16 @@ function renderDeploying(status) {
     : deployError?.message || (rollbackStatus ? detailText(rollbackStatus) : clickedTarget && status.status ? detailText(status) : "");
   if ($("deploy-feedback").textContent !== label) $("deploy-feedback").textContent = label;
 }
-async function deploy(variant) {
+async function deploy(config, fromEnv = false) {
   if (deployPending || deployBusy(state.status?.status)) return;
-  clickedTarget = variant; deployError = ""; rollbackStatus = null; deployPending = true;
+  clickedTarget = config.variant; envError = null; deployError = ""; rollbackStatus = null; deployPending = true;
   renderDeploying(state.status || {});
-  try { await api("/api/deploy", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({...draftConfig(), variant})}); }
-  catch (err) { deployError = err; }
+  try {
+    await api("/api/deploy", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(config)});
+    if (fromEnv) state.configDirty = false;
+  } catch (err) {
+    if (fromEnv) { clickedTarget = null; envError = err; } else deployError = err;
+  }
   finally { await refreshStatus(); deployPending = false; renderDeploying(state.status || {}); }
 }
 
@@ -455,7 +479,7 @@ async function loadGlossary(keepEdits = true) {
     glossary.dropped = new Set((payload.dropped || []).map(fold));
     glossary.issues = payload.issues || [];
     $("glossary-retry").hidden = true;
-    renderGlossary(payload);
+    renderGlossary(payload); renderSettingHints();
     return true;
   } catch (err) {
     if (request === glossary.request) {
@@ -547,7 +571,7 @@ function renderEnvMissing(payload) {
 }
 
 function tagChip(entry, index) {
-  const chip = document.createElement("span");
+  const chip = document.createElement("li");
   chip.className = "tag";
   chip.dataset.index = String(index);
   if (glossary.dropped.has(fold(entry.phrase))) {
@@ -783,12 +807,12 @@ function resetAudioResult() {
   audio.result = null; audio.message = "audio.empty"; audio.error = "";
   document.querySelector("[data-page=dict] .manual")?.remove();
 }
-async function sendAudio(blob, filename) {
+async function sendAudio(blob, filename, source = "file") {
   if (audio.pending || !blob || state.status?.status !== "ready") return;
   resetAudioResult();
   const controller = new AbortController(); audio.controller = controller;
   audio.pending = true; audio.message = "test.recognizing"; renderAudio();
-  const form = new FormData(); form.append("file", blob, filename);
+  const form = new FormData(); form.append("file", blob, filename); form.append("source", source);
   try {
     const result = await api("/api/test", {method:"POST", body:form, signal:controller.signal});
     if (audio.controller === controller) audio.result = result;
@@ -887,7 +911,7 @@ async function stopRecording(submit = true) {
     if (samples.length < rate * 0.25) {
       audio.result = null; audio.error = ""; audio.message = "test.tooShort"; renderAudio();
     } else if (state.status?.status === "ready") {
-      sendAudio(encodeWav(resample(samples, rate, TARGET_RATE), TARGET_RATE), t("snippet.file"));
+      sendAudio(encodeWav(resample(samples, rate, TARGET_RATE), TARGET_RATE), "microphone.wav", "microphone");
     } else { audio.result = null; audio.error = ""; audio.message = "audio.notSent"; renderAudio(); }
   }
   await closing;
@@ -971,28 +995,30 @@ async function toggleRecording() {
 
 /* --------------------------------------------------------------- сниппеты */
 
-function exampleOrigin() {
-  const raw = $("example-origin").value.trim();
-  if (!/^https?:\/\/[^\s/@?#\\]+\/?$/i.test(raw)) return null;
+// Этот адрес попадает только в примеры и буфер обмена, но не в запросы консоли.
+function clientBase(raw = $("base-url").value.trim()) {
   try {
     const url = new URL(raw);
-    if (state.mode === "owner" && url.protocol !== "https:") return null;
-    return /^[a-z\d.:[\]_-]+$/i.test(url.host) ? url.origin : null;
+    // URL переводит международные имена в ASCII; исходную запись проверяем отдельно,
+    // чтобы не принять скрытые парсером /../, обратный слеш или пустые credentials.
+    if (!/^https?:\/\/[^\s/@?#%\\]+(?:\/v1)?\/?$/i.test(raw) || url.username || url.password ||
+        !/^[a-z\d.:[\]_-]+$/i.test(url.hostname) || (state.mode === "owner" && url.protocol !== "https:")) return null;
+    return url.origin + "/v1";
   } catch { return null; }
 }
 function renderSnippets() {
-  const origin = exampleOrigin(), auth = $("example-key").checked;
+  const base = clientBase(), auth = $("example-key").checked;
   const file = t("snippet.file"), sep = " \\\n  ";
   const bearer = auth ? [ '-H "Authorization: Bearer $STT_API_KEY"' ] : [];
-  $("example-origin").setAttribute("aria-invalid", String(!origin));
-  $("address-error").textContent = origin ? "" : t(state.mode === "owner" ? "auth.addressInvalid" : "api.invalid");
-  $("base-url").textContent = origin ? origin + "/v1" : "—";
-  $("snip-curl").textContent = origin ? [`curl -X POST '${origin}/v1/audio/transcriptions'`, ...bearer, "-F 'model=whisper-1'", `-F 'file=@${file}'`].join(sep) : "—";
-  $("snip-models").textContent = origin ? [`curl '${origin}/v1/models'`, ...bearer].join(sep) : "—";
-  $("snip-py").textContent = origin ? (auth ? "import os\n" : "") + "from openai import OpenAI\n\n" +
-    `client = OpenAI(base_url="${origin}/v1", api_key=${auth ? 'os.environ["STT_API_KEY"]' : '"not-needed"'})\n` +
-    `with open("${file}", "rb") as audio:\n    result = client.audio.transcriptions.create(model="whisper-1", file=audio)\nprint(result.text)` : "—";
-  document.querySelectorAll('[data-page="api"] .copy').forEach(b => b.disabled = !origin);
+  $("base-url").setAttribute("aria-invalid", String(!base));
+  $("address-error").textContent = base ? "" : t(state.mode === "owner" ? "auth.addressInvalid" : "api.invalid");
+  $("base-url").setCustomValidity($("address-error").textContent);
+  $("snip-curl").textContent = base ? [`curl -X POST '${base}/audio/transcriptions'`, ...bearer, "-F 'model=kamerton'", `-F 'file=@${file}'`].join(sep) : "—";
+  $("snip-models").textContent = base ? [`curl '${base}/models'`, ...bearer].join(sep) : "—";
+  $("snip-py").textContent = base ? (auth ? "import os\n" : "") + "from openai import OpenAI\n\n" +
+    `client = OpenAI(base_url="${base}", api_key=${auth ? 'os.environ["STT_API_KEY"]' : '"not-needed"'})\n` +
+    `with open("${file}", "rb") as audio:\n    result = client.audio.transcriptions.create(model="kamerton", file=audio)\nprint(result.text)` : "—";
+  document.querySelectorAll('[data-page="api"] .copy:not([data-target="client-model"])').forEach(b => b.disabled = !base);
   $("link-docs").href = state.mode === "local" && state.key ? "/api/docs?api_key=" + encodeURIComponent(state.key) : "/api/docs";
 }
 let modelsRequest = 0;
@@ -1013,16 +1039,18 @@ function toast(text) {
   toastTimer = setTimeout(() => { $("live").textContent = ""; }, 2800);
 }
 async function copyText(button) {
-  const target = $(button.dataset.target), text = target.textContent, owner = page;
+  const target = $(button.dataset.target), dialog = button.closest("dialog"), owner = page;
+  const value = () => target.id === "base-url" ? clientBase() : target.textContent;
+  const text = value(), current = () => owner === page && value() === text && (!dialog || dialog.open);
   if (!text || button.disabled) return;
   document.querySelector(".manual")?.remove();
   try {
     await navigator.clipboard.writeText(text);
-    if (owner !== page || target.textContent !== text) return;
-    if (target.id === "key-secret") setText("key-copy-status", t("btn.copied"));
+    if (!current()) return;
+    if (dialog?.id === "secret-dialog") setText("key-copy-status", t("btn.copied"));
     else toast(t("btn.copied"));
   } catch {
-    if (owner !== page || !button.isConnected || target.textContent !== text) return;
+    if (!current() || !button.isConnected) return;
     const box = el("label", t("copy.manual"), "field manual"), area = el("textarea");
     area.readOnly = true; area.rows = 3; area.value = text; box.append(area);
     button.parentElement.after(box); area.focus(); area.select();
@@ -1057,12 +1085,6 @@ function rich(node, key, parts) {
 
 function renderRichTexts() {
   rich($("models-intro"), "models.intro", { volume: code("./models") });
-  rich($("opt-window-note"), "opt.window.note", {
-    rnnt: code("rnnt"),
-    e2e: code("e2e_rnnt"),
-    mlctc: code("ml_ctc"),
-    mlctcLarge: code("ml_ctc_large"),
-  });
   rich($("glossary-intro"), "glossary.intro", {});
   rich($("connect-intro"), "connect.intro", { prompt: code("prompt") });
 
@@ -1213,12 +1235,19 @@ function renderJournal() {
 }
 
 /* ------------------------------------------------------- сравнение моделей */
-const compare = {busy:false, signature:null, payload:null, error:""};
+const compare = {saving:false, saveError:null, busy:false, signature:null, payload:null, error:""};
 function renderCompare(force = false) {
   const downloaded = [...state.heads.values()].map(item => item.head).filter(head => head.downloaded);
   const enabled = state.status?.compare_enabled === true, changing = deployBusy(state.status?.status);
-  const available = enabled && state.catalog === "ready" && downloaded.length >= 2 && !changing;
-  const message = !state.status ? "audio.awaitStatus" : !enabled ? (state.mode === "owner" ? "compare.ownerDisabled" : "compare.disabled") : changing ? "compare.engineChanging"
+  const protectedMode = state.mode === "owner" || !!state.status?.api_key_set;
+  const canToggle = state.status?.compare_available ?? protectedMode;
+  const toggle = $("compare-enabled");
+  if (!compare.saving) toggle.checked = enabled;
+  toggle.disabled = !state.status || (!canToggle && !enabled) || compare.saving;
+  setText("compare-toggle-note", t(!state.status || canToggle ? "compare.toggleNote" : protectedMode ? "compare.noTemp" : "compare.needsKey"));
+  setText("compare-toggle-error", compare.saveError?.message || "");
+  const available = enabled && !compare.saving && state.catalog === "ready" && downloaded.length >= 2 && !changing;
+  const message = !state.status ? "audio.awaitStatus" : !enabled ? "compare.disabled" : changing ? "compare.engineChanging"
     : state.catalog === "loading" ? "compare.catalogLoading" : state.catalog === "error" ? "compare.catalogError"
     : downloaded.length < 2 ? "compare.weights" : "compare.method";
   setText("compare-availability", !state.status && state.statusError?.message || t(message));
@@ -1327,19 +1356,39 @@ function bindAudio() {
 }
 function init() {
   $("service-models").ontoggle = readServiceModels;
-  $("example-origin").value = location.origin;
+  const base = $("base-url"), localBase = location.origin + "/v1";
+  base.value = localBase;
+  try { base.value = clientBase(localStorage.getItem("kamerton_client_base") || "") || localBase; } catch {
+    /* Хранилище отключено. */
+  }
   const updateExamples = () => { document.querySelector('[data-page="api"] .manual')?.remove(); renderSnippets(); };
-  $("example-origin").oninput = updateExamples;
+  base.oninput = updateExamples;
+  base.onchange = () => {
+    const canonical = clientBase();
+    if (canonical) {
+      base.value = canonical;
+      try { localStorage.setItem("kamerton_client_base", canonical); } catch {
+        /* Только в этой вкладке. */
+      }
+    }
+    updateExamples();
+  };
   $("example-key").onchange = updateExamples;
-  $("reset-origin").onclick = () => { $("example-origin").value=location.origin; $("example-origin").oninput(); };
+  $("reset-origin").onclick = () => {
+    base.value = localBase;
+    try { localStorage.removeItem("kamerton_client_base"); } catch {
+      /* Хранилище отключено. */
+    }
+    updateExamples(); base.focus();
+  };
   $("mobile-nav").onchange = e => { location.hash = e.target.value; };
   document.querySelector(".skip").onclick = e => { e.preventDefault(); $("main").focus(); };
   window.addEventListener("hashchange", () => showPage(true));
   document.addEventListener("click", e => { const b = e.target.closest("button.copy"); if (b) copyText(b); });
   document.querySelectorAll(".lang-option").forEach(b => b.onclick = () => switchLang(b.dataset.lang));
   $("heads").onchange = e => { state.selected = e.target.value; state.configDirty = true; renderSelection(); };
-  $("config-form").oninput = () => { state.configDirty = true; renderDeploying(state.status || {}); };
-  $("config-form").onsubmit = e => { e.preventDefault(); if (!$("btn-deploy").disabled) deploy(state.selected); };
+  $("config-form").oninput = () => { state.configDirty = true; renderSettingHints(); renderDeploying(state.status || {}); };
+  $("config-form").onsubmit = e => { e.preventDefault(); if (!$("btn-deploy").disabled) deploy(draftConfig()); };
   $("legacy-access").hidden = state.mode !== "local";
   $("edit-key").disabled = state.mode !== "local";
   if (state.mode === "owner") ownerAccess.bind();
@@ -1367,6 +1416,16 @@ function init() {
   $("add-phrase").onpaste = e => {
     const text = e.clipboardData?.getData("text");
     if (text && /[\n,]/.test(text)) { e.preventDefault(); addPhrases(text); e.target.value=""; }
+  };
+  $("compare-enabled").onchange = async e => {
+    const enabled = e.target.checked, alreadyRunning = compare.busy;
+    compare.saving = true; compare.saveError = null; renderCompare();
+    try {
+      const saved = await api("/api/settings/compare", {method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({enabled})});
+      if (state.status) state.status.compare_enabled = saved.enabled;
+      if (!saved.enabled && !alreadyRunning) { compare.payload = null; compare.error = ""; }
+    } catch (err) { compare.saveError = err; await refreshStatus(); }
+    finally { compare.saving = false; renderCompare(true); }
   };
   $("compare-form").onsubmit = runCompare;
   $("compare-form").onchange = e => {

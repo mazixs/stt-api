@@ -191,6 +191,16 @@ class Handler(BaseHTTPRequestHandler):
                 "content_type": match.group(2).decode("utf-8", "ignore"),
                 "magic": match.group(3)[:4].decode("latin-1"),
                 "size": len(match.group(3)),
+                "sha256": hashlib.sha256(match.group(3)).hexdigest(),
+                "model": self._form_field(body, "model"),
+                "source": self._form_field(body, "source"),
+                "variant": Handler.variant,
+                "timestamps": [
+                    [name.decode(), value.decode()]
+                    for name, value in re.findall(
+                        rb'name="(timestamp_granularities(?:\[\])?)"\r\n\r\n([^\r\n]*)\r\n--', body,
+                    )
+                ],
             }
             if match
             else {}

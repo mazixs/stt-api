@@ -1,7 +1,11 @@
+import hashlib
+
 import httpx
 import pytest
 
-from conftest import wav_bytes
+from console.catalog import HEADS, openai_model_id
+from console.state import EngineConfig
+from conftest import opus_code3_packet, wav_bytes, webm_opus_bytes
 
 AUDIO = {"file": ("a.wav", wav_bytes(seconds=2), "audio/wav")}
 
@@ -67,15 +71,35 @@ async def test_failed_stream_releases_engine_and_is_not_a_success(client_ready, 
     assert client_ready.app.state.metrics.snapshot()["count"] == 0
 
 
-async def test_models_endpoint_lists_heads_and_alias(client_ready):
-    payload = (await client_ready.get("/v1/models")).json()
-    ids = [model["id"] for model in payload["data"]]
-    assert payload["object"] == "list"
-    assert "gigaam-v3-rnnt" in ids
-    assert "gigaam-multilingual-large-ctc" in ids
-    assert "whisper-1" in ids
-    deployed = [model["id"] for model in payload["data"] if model["deployed"]]
-    assert "gigaam-v3-rnnt" in deployed
+async def test_client_model_id_stays_stable_as_cabinet_switches_heads(client_stopped):
+    client = client_stopped
+    supervisor = client.app.state.supervisor
+
+    async def check_model(variant):
+        payload = (await client.get("/v1/models")).json()
+        assert payload["object"] == "list"
+        model, = payload["data"]
+        assert (model["id"], model["variant"], model["deployed"]) == ("kamerton", variant, variant is not None)
+        owner_model, = (await client.get("/api/client-models")).json()["data"]
+        assert {k: v for k, v in model.items() if k != "created"} == {
+            k: v for k, v in owner_model.items() if k != "created"
+        }
+        assert (await client.get("/api/status")).json()["engine"]["variant"] == variant
+
+    await check_model(None)
+    await supervisor.deploy(EngineConfig())
+    await check_model("rnnt")
+    assert (await client.post("/api/deploy", json={"variant": "ml_ctc"})).status_code == 202
+    await client.app.state.deploy_task
+    await check_model("ml_ctc")
+    pid = supervisor.process.pid
+    for model_id in ("kamerton", "whisper-1", *(openai_model_id(head) for head in HEADS)):
+        response = await client.post("/v1/audio/transcriptions", files=AUDIO, data={"model": model_id})
+        assert response.status_code == 200
+        assert (await engine_upload(client))["variant"] == "ml_ctc"
+    assert supervisor.process.pid == pid
+    await supervisor.stop_engine()
+    await check_model(None)
 
 
 async def test_translations_rejected_with_explanation(client_ready):
@@ -175,8 +199,6 @@ async def engine_upload(client) -> dict:
 
 async def test_browser_webm_reaches_the_engine_untouched(client_ready):
     """The engine demuxes WebM itself since 2.17.0, so the console must not rewrite it."""
-    from conftest import opus_code3_packet, webm_opus_bytes
-
     webm = webm_opus_bytes([opus_code3_packet([b"m" * 30] * 3)] * 4)
     response = await client_ready.post(
         "/v1/audio/transcriptions",
@@ -192,8 +214,6 @@ async def test_browser_webm_reaches_the_engine_untouched(client_ready):
 
 async def test_webm_gets_an_rtf_the_engine_would_not_have_reported(client_ready):
     """`json` responses carry no duration, so the console reads it off the container."""
-    from conftest import opus_code3_packet, webm_opus_bytes
-
     webm = webm_opus_bytes([opus_code3_packet([b"m" * 30] * 3)] * 50)
     await client_ready.post(
         "/v1/audio/transcriptions", files={"file": ("d.webm", webm, "audio/webm")}
@@ -212,6 +232,62 @@ async def test_formats_the_engine_supports_reach_it_byte_for_byte(client_ready):
     assert upload["magic"] == "RIFF"
     assert upload["filename"] == "a.wav"
     assert upload["size"] == len(payload)
+
+
+@pytest.mark.parametrize(("path", "fields", "source"), [
+    ("/v1/audio/transcriptions", {"source": "microphone"}, "api"),
+    ("/api/test", {}, "file"),
+    ("/api/test", {"source": "microphone"}, "microphone"),
+])
+async def test_upload_keeps_safe_original_basename_bytes_and_source(client_ready, path, fields, source):
+    name = "Заметка 19.11.webm"
+    webm = webm_opus_bytes([opus_code3_packet([b"m" * 30] * 3)] * 5)
+    response = await client_ready.post(
+        path, data=fields, files={"file": (f"../private/folder/{name}", webm, "audio/webm")},
+    )
+    assert response.status_code == 200
+    upload = await engine_upload(client_ready)
+    assert upload["filename"] == name and upload["content_type"] == "audio/webm"
+    assert upload["sha256"] == hashlib.sha256(webm).hexdigest()
+    if path == "/api/test":
+        assert upload["source"] is None
+    status = (await client_ready.get("/api/status")).json()
+    recent, = status["metrics"]["recent"]
+    assert (recent["name"], recent["source"]) == (name, source)
+    settings = client_ready.app.state.settings
+    assert name not in settings.metrics_path.read_text(encoding="utf-8")
+    assert name not in str((await client_ready.get("/api/journal")).json())
+
+
+async def test_nameless_upload_is_not_reported_as_fictitious_wav(client_ready):
+    audio = wav_bytes()
+    payload = (
+        b'--test\r\nContent-Disposition: form-data; name="file"; filename=""\r\n'
+        b'Content-Type: audio/wav\r\n\r\n' + audio + b'\r\n--test--\r\n'
+    )
+    response = await client_ready.post("/api/test", content=payload, headers={
+        "Content-Type": "multipart/form-data; boundary=test",
+    })
+    assert response.status_code == 200
+    assert (await engine_upload(client_ready))["sha256"] == hashlib.sha256(audio).hexdigest()
+    assert client_ready.app.state.metrics.snapshot()["recent"][0]["name"] == "без имени"
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/api/test"])
+@pytest.mark.parametrize("aliases", [
+    ("timestamp_granularities[]", "timestamp_granularities[]"),
+    ("timestamp_granularities", "timestamp_granularities"),
+    ("timestamp_granularities", "timestamp_granularities[]", "timestamp_granularities"),
+])
+async def test_timestamp_granularities_reach_engine_in_order(client_ready, path, aliases):
+    timestamps = list(zip(aliases, ("word", "segment", "word")))
+    response = await client_ready.post(path, files=[
+        ("file", AUDIO["file"]),
+        ("response_format", (None, "verbose_json")),
+        *((name, (None, value)) for name, value in timestamps),
+    ])
+    assert response.status_code == 200
+    assert (await engine_upload(client_ready))["timestamps"] == [list(pair) for pair in timestamps]
 
 
 # --------------------------------------------- словарь клиента, который не дошел

@@ -46,6 +46,8 @@ def build_compare_argv(settings: Settings, audio: Path, model_dir: Path, variant
 
 
 def build_argv(settings: Settings, cfg: EngineConfig) -> list[str]:
+    if cfg != cfg.fit_window_concurrency():
+        raise EngineStartupError("Число параллельных окон не может превышать размер пула.")
     argv = engine_command(
         settings,
         "serve",

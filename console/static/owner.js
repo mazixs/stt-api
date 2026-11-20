@@ -47,7 +47,7 @@ const ownerAccess = (() => {
     render();
   }
   function erase() {
-    setText("key-secret", ""); setText("key-copy-status", "");
+    setText("key-base", ""); setText("key-secret", ""); setText("key-copy-status", "");
     $("secret-dialog").querySelector(".manual")?.remove();
   }
   let sessionGeneration = 0;
@@ -61,12 +61,14 @@ const ownerAccess = (() => {
     event.preventDefault(); if (creating || loggingOut) return;
     const input = $("key-name"), name = input.value.trim();
     if (!name) { input.value = ""; input.reportValidity(); return; }
+    // Ключ действителен на сервере-эмитенте, а не по редактируемому адресу примеров.
+    const base = location.origin + "/v1";
     const current = sessionGeneration; creating = true; notice = ""; render();
     try {
       const result = await api("/api/keys", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({name})});
       if (current !== sessionGeneration || state.leaving) return;
       if (typeof result.key !== "string" || !result.key) throw new Error();
-      input.value = ""; setText("key-secret", result.key); $("secret-dialog").showModal();
+      input.value = ""; setText("key-base", base); setText("key-secret", result.key); $("secret-dialog").showModal();
     } catch { if (current === sessionGeneration) notice = "keys.createFailed"; }
     finally {
       creating = false; render();

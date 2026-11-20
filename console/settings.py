@@ -118,10 +118,6 @@ class Settings(BaseSettings):
         }
 
     @property
-    def compare_enabled(self) -> bool:
-        return self.enable_model_compare and (self.owner_access or bool(self.api_key))
-
-    @property
     def engine_base_url(self) -> str:
         host = f"[{self.engine_host}]" if ":" in self.engine_host else self.engine_host
         return f"http://{host}:{self.engine_port}"

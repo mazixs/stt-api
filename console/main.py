@@ -51,7 +51,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             clean_compare_temp_root(settings)
         except OSError:
-            settings.enable_model_compare = False
+            supervisor.block_compare_storage()
             logging.getLogger("console").warning(
                 "Не удалось очистить временный каталог; сравнение моделей отключено."
             )

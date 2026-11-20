@@ -19,7 +19,7 @@ h2 {font-size:clamp(1.3125rem,1.16rem + .4vw,1.75rem); line-height:1.22; letter-
 h3 {font-size:1.1875rem; line-height:1.28; letter-spacing:-.012em}
 p {max-inline-size:72ch}
 strong,b {font-weight:600}
-code,pre,time,.filename,#example-origin,#opt-boost {font-family:var(--mono); font-variant-numeric:tabular-nums}
+code,pre,time,.filename,#base-url,#opt-boost {font-family:var(--mono); font-variant-numeric:tabular-nums}
 code {overflow-wrap:anywhere}
 button,select,input,textarea,.button,summary {font:inherit; color:inherit}
 button,.button,select,input:not([type=checkbox],[type=radio],[type=file]),textarea {max-inline-size:100%; min-inline-size:0; min-block-size:var(--control); border:1px solid var(--edge); border-radius:.3125rem; background:var(--paper)}
@@ -302,6 +302,33 @@ th,td {text-align:start; padding:.5rem; border-bottom:1px solid var(--line); fon
 dialog {color:var(--ink); background:var(--paper); inline-size:min(calc(100% - 2rem),30rem); max-block-size:calc(100% - 2rem); border:1px solid var(--edge); border-radius:.375rem; padding:var(--pad); overscroll-behavior:contain; overflow-wrap:anywhere}
 dialog::backdrop {background:rgb(25 27 26 / .57)}
 dialog .actions {margin:0}
-#key-secret {padding:.8rem; background:var(--tint); border-radius:.25rem; user-select:all}
+.copy-row {display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:.5rem}
+.copy-row code {padding:.65rem; min-inline-size:0; border-radius:.25rem; background:var(--bg); font: .9rem/1.5 var(--mono); user-select:all}
+.credentials {display:grid; gap:1rem}
+.credentials dt,.setting label,#tags>label {font-weight:600}
+.credentials dt {margin-block-end:.35rem}
+dialog::backdrop {overflow:hidden; overscroll-behavior:contain}
+#base-url {font: .9rem/1.5 var(--mono)}
+.source-kind {display:block; color:var(--sub)}
+.setting {display:grid; align-content:start; gap:.35rem}
+.setting:has(:disabled) label {color:var(--sub)}
+.setting :is(select,input):disabled {background:#eff0ed; border:1px dashed var(--edge); color:#5a5c59; opacity:1; cursor:not-allowed}
+.setting .help {font-size:.875rem}
+.cfgfields .stack {gap:1.25rem}
+.compare-setting {gap:.25rem}
+.compare-setting .check {margin:0}
+#tags {gap:.4rem}
+.tag-entry {max-inline-size:38rem}
+#tag-list:not(:empty) {margin-block-start:.7rem; max-block-size:min(48dvh,31rem); overflow-y:auto; align-content:start; scrollbar-gutter:stable; overscroll-behavior-y:contain; padding:.4rem; border:1px solid var(--line); border-radius:.3rem}
+.tag-text {min-inline-size:0}
+@media(max-width:34em){
+  .cfghead {align-items:flex-start}
+  .copy-row {gap:.4rem}
+  .copy-row button {inline-size:var(--control); padding:0}
+  .copy-row button span {display:none}
+  #tag-list:not(:empty) {display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,7rem),1fr)); scrollbar-gutter:auto}
+  .tag {justify-content:space-between; padding-inline-start:.35rem; gap:.15rem}
+  .tag-remove {min-width:2rem}
+}
 #owner-logout {flex-shrink:0}
 @media(max-width:34em){.login-header {padding-block:.65rem}.login-main {padding-block:2rem}}
