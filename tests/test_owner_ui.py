@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -27,6 +28,7 @@ async def owner_ui(live_client):
             page = await context.new_page()
             page.on("pageerror", lambda exc: config["errors"].append(str(exc)))
             await page.add_init_script("""if (!sessionStorage.seeded) {
+                localStorage.setItem('kamerton_client_base','https://speech.example');
                 localStorage.setItem('stt_console_key','discard-before-any-request'); sessionStorage.seeded='1';
             }""")
 
@@ -142,6 +144,11 @@ async def test_owner_keys_keyboard_and_copy_in_chrome(owner_ui):
     secret = page.locator("#key-secret")
     await expect(secret).to_have_text(SECRET)
     assert SECRET not in await page.evaluate("JSON.stringify(localStorage) + JSON.stringify(sessionStorage)")
+    await expect(page.locator("#base-url")).to_have_value("https://speech.example/v1")
+    for selector, value in [("key-base", origin + "/v1"), ("key-model", "kamerton")]:
+        await expect(page.locator("#" + selector)).to_have_text(value)
+        await page.locator(f'#secret-dialog [data-target="{selector}"]').click()
+        assert await page.evaluate("navigator.clipboard.readText()") == value
     await page.locator("#key-copy").press("Enter")
     await expect(page.locator("#key-copy-status")).not_to_be_empty()
     assert await page.evaluate("navigator.clipboard.readText()") == SECRET
@@ -192,21 +199,48 @@ async def test_key_cleanup_and_responsive_locales_in_chrome(owner_ui):
 async def test_owner_example_requires_https_but_local_accepts_http(owner_ui):
     page, expect, _, origin = owner_ui
     await page.goto(origin + "/#api")
-    address, copy = page.locator("#example-origin"), page.locator('[data-target="snip-curl"]')
+    address, copy = page.locator("#base-url"), page.locator('[data-target="snip-curl"]')
     await address.fill("http://dictation.example")
     await expect(address).to_have_attribute("aria-invalid", "true")
     await expect(page.locator("#address-error")).to_contain_text("https://")
     await expect(copy).to_be_disabled()
     await expect(page.locator("#snip-curl")).to_have_text("—")
+    for invalid in ("https://user@dictation.example/v1", "https://dictation.example/v1/other", "https://dictation.example/v1?token=x"):
+        await address.fill(invalid)
+        await expect(address).to_have_attribute("aria-invalid", "true")
+        await expect(copy).to_be_disabled()
     await address.fill("https://dictation.example")
-    await expect(page.locator("#base-url")).to_have_text("https://dictation.example/v1")
+    await address.press("Tab")
+    await expect(address).to_have_value("https://dictation.example/v1")
+    await expect(page.locator("#snip-py")).to_contain_text('model="kamerton"')
+    await expect(page.locator("#snip-curl")).to_contain_text("https://dictation.example/v1/audio/transcriptions")
+    await page.reload()
+    await expect(address).to_have_value("https://dictation.example/v1")
     await expect(copy).to_be_enabled()
+    await address.fill("https://пример.рф/v1/")
+    await address.press("Tab")
+    canonical = "https://xn--e1afmkfd.xn--p1ai/v1"
+    await expect(address).to_have_value(canonical)
+    await expect(page.locator("#snip-models")).to_contain_text(canonical + "/models")
+    await page.reload()
+    await expect(address).to_have_value(canonical)
+    await page.locator("#key-name").fill("IDN example override")
+    await page.locator("#key-create").click()
+    await expect(page.locator("#key-base")).to_have_text(origin + "/v1")
+    await expect(page.locator("#key-secret")).to_have_text(SECRET)
+    await page.reload()
+    await expect(page.locator("#secret-dialog")).to_be_hidden()
+    await expect(page.locator("#key-secret")).to_be_empty()
+    await expect(address).to_have_value(canonical)
     # Без заглушек тот же uvicorn работает в режиме local.
     await page.unroute_all(behavior="wait")
     await page.reload()
     await address.fill("http://dictation.example")
     await expect(address).to_have_attribute("aria-invalid", "false")
-    await expect(page.locator("#base-url")).to_have_text("http://dictation.example/v1")
+    await address.press("Tab")
+    await expect(address).to_have_value("http://dictation.example/v1")
+    await page.locator("#reset-origin").click()
+    await expect(address).to_have_value(origin + "/v1")
     await expect(copy).to_be_enabled()
 
 
@@ -354,3 +388,62 @@ async def test_session_error_never_falls_back_to_stored_key(owner_ui):
     await page.locator("#session-retry").click()
     await expect(page.locator("#key-list-status")).to_have_text("No keys yet.")
     assert await page.evaluate("localStorage.getItem('stt_console_key')") is None
+
+
+@pytest.mark.parametrize("width", [320, 390, 1440])
+async def test_client_dialog_and_large_glossary_layout(owner_ui, width):
+    page, expect, _, origin = owner_ui
+    await page.set_viewport_size({"width": width, "height": 844 if width < 500 else 900})
+    folder = os.environ.get("KAMERTON_UI_ARTIFACTS")
+    phrases = [f"Термин {index:03}" for index in range(1, 231)]
+
+    async def capture(view, lang):
+        assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        if folder:
+            out = Path(folder)
+            out.mkdir(parents=True, exist_ok=True)
+            await page.screenshot(path=out / f"{view}-{width}-{lang}.png", animations="disabled")
+
+    async def navigate(section):
+        if width < 500:
+            await page.locator("#mobile-nav").select_option(section)
+        else:
+            await page.locator(f'#railnav a[href="#{section}"]').click()
+        await expect(page.locator(f'[data-page="{section}"]')).to_be_visible()
+
+    await page.goto(origin + "/#glossary")
+    await page.locator("#glossary-file").set_input_files({
+        "name": "synthetic.txt", "mimeType": "text/plain", "buffer": "\n".join(phrases).encode()})
+    tags = page.locator("#tag-list .tag-text")
+    await expect(tags).to_have_count(230)
+    await page.locator("#tag-list .tag-remove").last.click()
+    await expect(tags).to_have_count(229)
+    await page.locator("#add-phrase").fill(phrases[-1])
+    await page.locator("#btn-add").click()
+    await expect(tags.last).to_have_text(phrases[-1])
+    await page.locator("#btn-glossary").click()
+    await expect(page.locator("#btn-glossary")).to_be_disabled()
+    for lang in ("ru", "en"):
+        await page.locator(f'.lang-option[data-lang="{lang}"]:visible').click()
+        await navigate("glossary")
+        await expect(tags).to_have_count(230)
+        await page.locator("#tag-list").evaluate("node => node.scrollTop = 0")
+        await page.evaluate("scrollTo(0,0)")
+        await capture("glossary", lang)
+        tray = await page.locator("#tag-list").bounding_box()
+        panel = await page.locator('[data-page="glossary"]').bounding_box()
+        assert tray["width"] >= panel["width"] * .84
+        await navigate("settings")
+        await expect(page.locator("#opt-pool")).to_be_enabled()
+        await expect(page.locator("#window-note")).not_to_be_empty()
+        await capture("settings", lang)
+        await navigate("api")
+        await expect(page.locator("#base-url")).to_have_value("https://speech.example/v1")
+        await capture("client", lang)
+        await page.locator("#key-name").fill(f"Synthetic {lang}")
+        await page.locator("#key-create").click()
+        await expect(page.locator("#key-secret")).to_have_text(SECRET)
+        await capture("dialog", lang)
+        assert await page.locator("#secret-dialog").evaluate("node => node.scrollWidth <= node.clientWidth")
+        await page.locator("#key-dismiss").click()
+        assert SECRET not in await page.content()

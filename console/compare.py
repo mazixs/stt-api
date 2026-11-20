@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
-from starlette.datastructures import UploadFile
+from starlette.datastructures import FormData, UploadFile
 from starlette.exceptions import HTTPException
 from starlette.types import Message
 
@@ -45,7 +45,11 @@ def _engine_busy() -> ApiError:
     return ApiError(409, "Движок занят запуском или настройкой. Повторите позже.", "compare_engine_busy")
 
 
-async def _read_audio(request: Request, stack: AsyncExitStack) -> tuple[UploadFile, dict[str, str]]:
+def _disabled() -> ApiError:
+    return ApiError(503, "Сравнение моделей отключено.", "compare_disabled", "server_error")
+
+
+async def _read_audio(request: Request, stack: AsyncExitStack) -> tuple[UploadFile, FormData]:
     deadline = asyncio.get_running_loop().time() + UPLOAD_TIMEOUT
 
     async def receive() -> Message:
@@ -212,9 +216,10 @@ async def compare_models(request: Request) -> dict[str, Any]:
     Передача файла и подготовка временного каталога не входят в замер.
     """
     settings: Settings = request.app.state.settings
-    if not settings.compare_enabled:
-        raise ApiError(503, "Сравнение моделей отключено.", "compare_disabled", "server_error")
     supervisor = request.app.state.supervisor
+    if not supervisor.compare_enabled:
+        raise _disabled()
+    epoch = supervisor.compare_epoch
     if not supervisor.comparison_allowed:
         raise _engine_busy()
     lock: asyncio.Lock = request.app.state.compare_lock
@@ -223,11 +228,13 @@ async def compare_models(request: Request) -> dict[str, Any]:
 
     async with lock, AsyncExitStack() as stack:
         upload, fields = await _read_audio(request, stack)
+        if not supervisor.compare_enabled or supervisor.compare_epoch != epoch:
+            raise _disabled()
         a, b = fields.get("variant_a", ""), fields.get("variant_b", "")
         del fields
         if not a or not b:
             raise ApiError(400, "Укажите обе модели.", "compare_missing_variant")
-        if a not in HEADS or b not in HEADS:
+        if not isinstance(a, str) or not isinstance(b, str) or a not in HEADS or b not in HEADS:
             raise ApiError(400, "Неизвестная модель для сравнения.", "compare_unknown_variant")
         if a == b:
             raise ApiError(400, "Выберите разные модели.", "compare_same_variant")

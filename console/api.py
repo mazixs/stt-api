@@ -15,16 +15,18 @@ import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from . import owner_access
 from .auth import require_api_key
-from .catalog import DEFAULT_LANG, HEADS, LANGS, is_downloaded, pick
+from .catalog import DEFAULT_LANG, HEADS, LANGS, PUBLIC_MODEL_ID, is_downloaded, pick
 from .errors import ApiError
 from .glossary import entry_issues, parse_context, read_glossary
 from .proxy import (
+    TIMESTAMP_GRANULARITIES,
     TRANSCRIBE_TIMEOUT,
     models as client_models,
+    multipart_upload_parts,
     read_upload,
     require_ready,
     upload_duration_seconds,
@@ -47,6 +49,8 @@ _PUBLIC_ENGINE_DETAIL = {
 
 
 class DeployRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     variant: HeadId
     punctuation: Mode | None = None
     itn: Mode | None = None
@@ -57,7 +61,7 @@ class DeployRequest(BaseModel):
     file_window_concurrency: int | None = Field(default=None, ge=1, le=8)
 
     def to_config(self, defaults: EngineConfig) -> EngineConfig:
-        return EngineConfig(
+        config = EngineConfig(
             variant=self.variant,
             punctuation=self.punctuation or defaults.punctuation,
             itn=self.itn or defaults.itn,
@@ -75,6 +79,19 @@ class DeployRequest(BaseModel):
                 self.file_window_concurrency or defaults.file_window_concurrency
             ),
         )
+        fitted = config.fit_window_concurrency()
+        if fitted != config and self.file_window_concurrency is not None:
+            raise ApiError(
+                422, "Число параллельных окон не может превышать размер пула.",
+                "invalid_file_window_concurrency",
+            )
+        return fitted
+
+
+class CompareSetting(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: StrictBool
 
 
 class GlossaryRequest(BaseModel):
@@ -141,13 +158,22 @@ def _status_payload(request: Request) -> dict[str, Any]:
         "restart_count": supervisor.restart_count,
         "uptime_seconds": int(time.monotonic() - STARTED_AT),
         "max_upload_mb": settings.max_upload_mb,
-        "compare_enabled": settings.compare_enabled,
+        "compare_enabled": supervisor.compare_enabled,
+        "compare_available": supervisor.compare_available,
     }
 
 
 @admin.get("/status")
 async def status(request: Request) -> dict[str, Any]:
     return _status_payload(request)
+
+
+@admin.put("/settings/compare")
+async def set_compare(request: Request, body: CompareSetting) -> CompareSetting:
+    """Сохранить доступность сравнения без перезапуска рабочего движка."""
+    supervisor = request.app.state.supervisor
+    supervisor.set_compare_enabled(body.enabled)
+    return CompareSetting(enabled=supervisor.compare_enabled)
 
 
 @admin.get("/models")
@@ -327,15 +353,16 @@ async def test_transcription(request: Request) -> JSONResponse:
     settings = request.app.state.settings
     metrics = request.app.state.metrics
 
-    payload = {"model": "whisper-1", "response_format": "json"}
-    payload.update({k: v for k, v in fields.items() if k in ("language", "response_format")})
+    form = dict(fields)
+    source = "microphone" if form.get("source") == "microphone" else "file"
+    payload = [("model", PUBLIC_MODEL_ID), ("response_format", form.get("response_format", "json"))]
+    payload.extend((k, v) for k, v in fields if k == "language" or k in TIMESTAMP_GRANULARITIES)
 
     try:
         async with httpx.AsyncClient(timeout=TRANSCRIBE_TIMEOUT, trust_env=False) as client:
             response = await client.post(
                 f"{settings.engine_base_url}/v1/audio/transcriptions",
-                data=payload,
-                files={"file": (filename, data, content_type)},
+                files=multipart_upload_parts(data, filename, content_type, payload),
             )
     except httpx.HTTPError as exc:
         raise ApiError(
@@ -354,7 +381,7 @@ async def test_transcription(request: Request) -> JSONResponse:
         text = response.text
 
     audio_seconds = upload_duration_seconds(data)
-    metrics.record(audio_seconds, elapsed, filename)
+    metrics.record(audio_seconds, elapsed, filename, source=source)
     return JSONResponse(
         {
             "text": text,

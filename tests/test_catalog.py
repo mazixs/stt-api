@@ -39,11 +39,13 @@ def test_openai_model_ids():
 
 
 def test_badges_name_our_own_measurement_not_someone_elses_table():
-    assert HEADS["e2e_rnnt"].badge["ru"] == "лучшая для русского"
-    assert HEADS["ml_ctc_large"].badge["ru"] == "лучшая мультиязычная"
+    e2e, large = HEADS["e2e_rnnt"].badge, HEADS["ml_ctc_large"].badge
+    assert e2e and e2e["ru"] == "низкая ошибка на FLEURS ru"
+    assert large and large["ru"] == "требует больше памяти"
     assert HEADS["rnnt"].badge is None and HEADS["ml_ctc"].badge is None
     for head in HEADS.values():
         if head.badge:
+            assert head.badge_note is not None
             assert "наш замер" in head.badge_note["ru"]
             assert "our own measurement" in head.badge_note["en"].lower()
 

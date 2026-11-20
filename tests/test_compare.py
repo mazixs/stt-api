@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from console import compare
+from console import compare, state
 from console.catalog import HEADS
 from console.main import create_app
 from console.state import EngineConfig
@@ -19,9 +19,11 @@ FILE = "private-filename.wav"
 AUDIO = wav_bytes(0.5)
 
 
-def enable(settings):
-    settings.enable_model_compare = True
+async def enable(client):
+    settings = client.app.state.settings
     settings.api_key = KEY
+    response = await client.put("/api/settings/compare", headers=AUTH, json={"enabled": True})
+    assert response.status_code == 200 and response.json() == {"enabled": True}
     return settings
 
 
@@ -75,16 +77,20 @@ def children(monkeypatch):
 async def test_compare_disabled_by_default_and_requires_api_key(client_stopped, monkeypatch):
     client = client_stopped
     settings = client.app.state.settings
-    assert (await client.get("/api/status")).json()["compare_enabled"] is False
+    status = (await client.get("/api/status")).json()
+    assert status["compare_enabled"] is False and status["compare_available"] is False
     error(await submit(client), 503, "compare_disabled")
+    error(await client.put("/api/settings/compare", json={"enabled": True}), 403, "compare_auth_required")
 
     monkeypatch.setenv("ENABLE_MODEL_COMPARE", "1")
     assert type(settings)(_env_file=None).enable_model_compare is True
     settings.enable_model_compare = True
-    assert (await client.get("/api/status")).json()["compare_enabled"] is False
-    error(await submit(client), 503, "compare_disabled")
-
     settings.api_key = KEY
+    assert (await client.get("/api/status", headers=AUTH)).json()["compare_enabled"] is False
+    error(await client.put("/api/settings/compare", json={"enabled": True}), 401, "invalid_api_key")
+    error(await client.put("/api/settings/compare", params={"api_key": KEY}, json={"enabled": True}),
+          401, "invalid_api_key")
+    await enable(client)
     assert (await client.get("/api/status", headers=AUTH)).json()["compare_enabled"] is True
     # При отказе даже чтение аудио для запуска двух CLI еще не началось.
     async def unexpected_read(*args, **kwargs):
@@ -95,9 +101,61 @@ async def test_compare_disabled_by_default_and_requires_api_key(client_stopped, 
     error(await submit(client, headers={"Authorization": "Bearer wrong"}), 401, "invalid_api_key")
 
 
+async def test_compare_settings_override_env_and_survive_engine_state_changes(console_settings):
+    settings = console_settings.model_copy(update={
+        "enable_model_compare": True, "api_key": KEY, "autostart": False,
+    })
+    app = create_app(settings)
+    async with app.router.lifespan_context(app), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://console", headers=AUTH,
+    ) as client:
+        assert (await client.get("/api/status")).json()["compare_enabled"] is True
+        await app.state.supervisor.deploy(EngineConfig())
+        pid = app.state.supervisor.process.pid
+        for invalid in ({}, {"enabled": 1}, {"enabled": "false"}, {"enabled": False, "other": 1}):
+            assert (await client.put("/api/settings/compare", json=invalid)).status_code == 422
+        response = await client.put("/api/settings/compare", json={"enabled": False})
+        assert response.status_code == 200 and response.json() == {"enabled": False}
+        assert app.state.supervisor.process.pid == pid
+        assert (await client.get("/api/status")).json()["compare_enabled"] is False
+        error(await submit(client), 503, "compare_disabled")
+        await app.state.supervisor.stop_engine()
+
+    stored = state.StateFile(settings.state_path).load()
+    assert stored.compare_enabled is False and stored.last_good == EngineConfig()
+    restarted = create_app(settings)
+    assert restarted.state.supervisor.compare_enabled is False
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=restarted), base_url="http://console", headers=AUTH,
+    ) as client:
+        response = await client.put("/api/settings/compare", json={"enabled": True})
+        assert response.status_code == 200 and response.json() == {"enabled": True}
+    settings_off = settings.model_copy(update={"enable_model_compare": False})
+    assert create_app(settings_off).state.supervisor.compare_enabled is True
+    open_settings = settings_off.model_copy(update={"api_key": ""})
+    assert create_app(open_settings).state.supervisor.compare_enabled is False
+
+
+async def test_failed_atomic_compare_setting_write_leaves_setting_and_state_intact(client_stopped, monkeypatch):
+    client = client_stopped
+    settings = await enable(client)
+    before = settings.state_path.read_bytes()
+
+    def fail_replace(*_args):
+        raise OSError("private state path")
+
+    monkeypatch.setattr(state.os, "replace", fail_replace)
+    response = await client.put("/api/settings/compare", headers=AUTH, json={"enabled": False})
+    error(response, 503, "compare_settings_unavailable")
+    assert "private state path" not in response.text
+    assert settings.state_path.read_bytes() == before
+    assert not list(settings.data_dir.glob("*.tmp"))
+    assert (await client.get("/api/status", headers=AUTH)).json()["compare_enabled"] is True
+
+
 async def test_compare_runs_two_isolated_cold_processes_in_order(client_stopped, fake_cli):
     client = client_stopped
-    settings = enable(client.app.state.settings)
+    settings = await enable(client)
     supervisor = client.app.state.supervisor
     await supervisor.deploy(EngineConfig())
     install(settings, "e2e_rnnt")
@@ -131,6 +189,7 @@ async def test_compare_runs_two_isolated_cold_processes_in_order(client_stopped,
     assert supervisor.status == "ready" and supervisor.current.variant == "rnnt"
     assert supervisor.process.pid == pid and settings.state_path.read_bytes() == stored
     assert {p.name: p.read_bytes() for p in settings.model_dir.iterdir()} == models
+    assert (await client.get("/api/status", headers=AUTH)).json()["metrics"]["recent"] == []
 
 
 @pytest.mark.parametrize(("a", "b", "audio", "code"), [
@@ -140,14 +199,14 @@ async def test_compare_runs_two_isolated_cold_processes_in_order(client_stopped,
     ("rnnt", "e2e_rnnt", b"", "compare_empty_file"),
 ], ids=("missing", "unknown", "same", "empty"))
 async def test_compare_validates_request(client_stopped, children, a, b, audio, code):
-    enable(client_stopped.app.state.settings)
+    await enable(client_stopped)
     response = await submit(client_stopped, a=a, b=b, audio=audio)
     error(response, 400, code)
     assert "secret-variant" not in response.text and children == []
 
 
 async def test_compare_does_not_read_large_upload_into_memory(client_stopped, fake_cli, monkeypatch):
-    settings = enable(client_stopped.app.state.settings)
+    settings = await enable(client_stopped)
     install(settings, "rnnt", "e2e_rnnt")
     read = compare.UploadFile.read
 
@@ -163,7 +222,7 @@ async def test_compare_does_not_read_large_upload_into_memory(client_stopped, fa
 
 
 async def test_compare_never_downloads_missing_head(client_stopped, children):
-    settings = enable(client_stopped.app.state.settings)
+    settings = await enable(client_stopped)
     install(settings, "rnnt")
     response = await submit(client_stopped)
     error(response, 409, "compare_model_not_downloaded")
@@ -172,7 +231,7 @@ async def test_compare_never_downloads_missing_head(client_stopped, children):
 
 
 async def test_compare_reuses_limit_and_limits_chunked_multipart(client_stopped, children):
-    settings = enable(client_stopped.app.state.settings)
+    settings = await enable(client_stopped)
     settings.max_upload_mb = 1
     error(
         await submit(client_stopped, audio=b"0" * (settings.max_upload_bytes + 1)),
@@ -194,7 +253,7 @@ async def test_compare_reuses_limit_and_limits_chunked_multipart(client_stopped,
 
 
 async def test_compare_sanitizes_malformed_multipart(client_stopped, children):
-    enable(client_stopped.app.state.settings)
+    await enable(client_stopped)
     response = await client_stopped.post(
         "/api/compare", content=b"--wrong", headers={
             **AUTH, "Content-Type": "multipart/form-data; boundary=expected",
@@ -205,7 +264,7 @@ async def test_compare_sanitizes_malformed_multipart(client_stopped, children):
 
 
 async def test_compare_sanitizes_cli_error_and_keeps_no_partial_results(client_stopped, fake_cli):
-    settings = enable(client_stopped.app.state.settings)
+    settings = await enable(client_stopped)
     install(settings, "rnnt", "e2e_rnnt")
     env, records = fake_cli
     env["FAKE_COMPARE_FAIL"] = "e2e_rnnt"
@@ -218,7 +277,7 @@ async def test_compare_sanitizes_cli_error_and_keeps_no_partial_results(client_s
 
 
 async def test_compare_timeout_reaps_cli_and_releases_slot(client_stopped, fake_cli, children, monkeypatch):
-    settings = enable(client_stopped.app.state.settings)
+    settings = await enable(client_stopped)
     install(settings, "rnnt", "e2e_rnnt")
     env, _ = fake_cli
     env["FAKE_COMPARE_DELAY"] = "30"
@@ -237,7 +296,7 @@ async def test_compare_timeout_reaps_cli_and_releases_slot(client_stopped, fake_
 
 
 async def test_live_compare_rejects_busy_and_kills_on_disconnect(live_client, fake_cli, children):
-    settings = enable(live_client.app.state.settings)
+    settings = await enable(live_client)
     install(settings, "rnnt", "e2e_rnnt")
     env, records = fake_cli
     env["FAKE_COMPARE_DELAY"] = "30"
@@ -259,7 +318,7 @@ async def test_live_compare_rejects_busy_and_kills_on_disconnect(live_client, fa
 
 
 async def test_cancellation_while_starting_cli_reaps_it(client_stopped, fake_cli, children, monkeypatch):
-    settings = enable(client_stopped.app.state.settings)
+    settings = await enable(client_stopped)
     install(settings, "rnnt", "e2e_rnnt")
     fake_cli[0]["FAKE_COMPARE_DELAY"] = "30"
     entering_spawn, release_spawn = asyncio.Event(), asyncio.Event()
@@ -291,7 +350,7 @@ async def test_engine_start_preempts_compare_and_waits_for_reap(
     client_stopped, fake_cli, children, monkeypatch, operation,
 ):
     client = client_stopped
-    settings = enable(client.app.state.settings)
+    settings = await enable(client)
     supervisor = client.app.state.supervisor
     await supervisor.deploy(EngineConfig())
     install(settings, "e2e_rnnt")
@@ -350,7 +409,7 @@ async def test_engine_start_preempts_compare_and_waits_for_reap(
 
 async def test_glossary_reload_keeps_gate_if_request_is_cancelled(client_ready, monkeypatch):
     supervisor = client_ready.app.state.supervisor
-    enable(client_ready.app.state.settings)
+    await enable(client_ready)
     rebuilding, release = asyncio.Event(), asyncio.Event()
 
     async def reload():
@@ -398,7 +457,7 @@ async def test_native_reload_holds_gate_after_client_cancellation(
     client_stopped, fake_cli, children, tmp_path, monkeypatch,
 ):
     client = client_stopped
-    settings = enable(client.app.state.settings)
+    settings = await enable(client)
     supervisor = client.app.state.supervisor
     release = tmp_path / "release-native-reload"
     monkeypatch.setenv("FAKE_RELOAD_RELEASE", str(release))
@@ -469,7 +528,7 @@ async def test_native_reload_holds_gate_after_client_cancellation(
 async def test_compare_rechecks_gate_if_deploy_starts_during_upload(client_stopped, children, monkeypatch):
     client = client_stopped
     supervisor = client.app.state.supervisor
-    enable(client.app.state.settings)
+    await enable(client)
     receiving, finish_upload = asyncio.Event(), asyncio.Event()
     downloading, finish_download = asyncio.Event(), asyncio.Event()
     read_audio = compare._read_audio
@@ -500,9 +559,59 @@ async def test_compare_rechecks_gate_if_deploy_starts_during_upload(client_stopp
         await asyncio.gather(comparison, deployment, return_exceptions=True)
 
 
+async def test_disabling_invalidates_an_upload_even_if_reenabled(client_stopped, children, fake_cli, monkeypatch):
+    client = client_stopped
+    settings = await enable(client)
+    install(settings, "rnnt", "e2e_rnnt")
+    receiving, finish_upload = asyncio.Event(), asyncio.Event()
+    read_audio = compare._read_audio
+
+    async def slow_upload(*args):
+        receiving.set()
+        await finish_upload.wait()
+        return await read_audio(*args)
+
+    monkeypatch.setattr(compare, "_read_audio", slow_upload)
+    first = asyncio.create_task(submit(client))
+    try:
+        await asyncio.wait_for(receiving.wait(), 5)
+        error(await submit(client), 409, "compare_busy")
+        response = await client.put("/api/settings/compare", headers=AUTH, json={"enabled": False})
+        assert response.json() == {"enabled": False}
+        error(await submit(client), 503, "compare_disabled")
+        await enable(client)
+        finish_upload.set()
+        error(await first, 503, "compare_disabled")
+        assert children == []
+        assert (await submit(client)).status_code == 200
+        assert len(fake_cli[1]()) == 4
+    finally:
+        finish_upload.set()
+        await asyncio.gather(first, return_exceptions=True)
+
+
+async def test_disabling_allows_started_compare_to_finish(client_stopped, fake_cli):
+    client = client_stopped
+    settings = await enable(client)
+    install(settings, "rnnt", "e2e_rnnt")
+    env, records = fake_cli
+    env["FAKE_COMPARE_DELAY"] = "0.5"
+    first = asyncio.create_task(submit(client))
+    try:
+        await wait_for(lambda: bool(records()))
+        response = await client.put("/api/settings/compare", headers=AUTH, json={"enabled": False})
+        assert response.json() == {"enabled": False}
+        error(await submit(client), 503, "compare_disabled")
+        assert (await first).status_code == 200
+        assert [record["phase"] for record in records()] == ["start", "done", "start", "done"]
+    finally:
+        await asyncio.gather(first, return_exceptions=True)
+
+
 async def test_startup_removes_only_its_stale_compare_directory(console_settings, tmp_path, monkeypatch):
-    settings = enable(console_settings)
-    settings.autostart = False
+    settings = console_settings.model_copy(update={
+        "enable_model_compare": True, "api_key": KEY, "autostart": False,
+    })
     monkeypatch.setattr(compare.tempfile, "gettempdir", lambda: str(tmp_path))
     root = compare._temp_root(settings)
     root.mkdir(mode=0o700)
@@ -520,7 +629,32 @@ async def test_startup_removes_only_its_stale_compare_directory(console_settings
     async with app.router.lifespan_context(app):
         assert not root.exists()
         assert neighbor.read_bytes() == b"other console"
-        assert settings.compare_enabled is True
+        assert app.state.supervisor.compare_enabled is True
+        await wait_for(settings.state_path.exists)
+    assert state.StateFile(settings.state_path).load().compare_enabled is True
+    off_env = settings.model_copy(update={"enable_model_compare": False})
+    assert create_app(off_env).state.supervisor.compare_enabled is True
+
+
+async def test_compare_startup_cleanup_failure_fails_closed(console_settings, monkeypatch):
+    settings = console_settings.model_copy(update={
+        "enable_model_compare": True, "api_key": KEY, "autostart": False,
+    })
+
+    def fail_cleanup(*_args):
+        raise OSError("private temp root")
+
+    monkeypatch.setattr("console.main.clean_compare_temp_root", fail_cleanup)
+    app = create_app(settings)
+    async with app.router.lifespan_context(app), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://console", headers=AUTH,
+    ) as client:
+        status = (await client.get("/api/status")).json()
+        assert status["compare_enabled"] is False and status["compare_available"] is False
+        error(await submit(client), 503, "compare_disabled")
+        error(await client.put("/api/settings/compare", json={"enabled": True}),
+              503, "compare_storage_unavailable")
+        assert settings.enable_model_compare is True
 
 
 def test_compare_cli_environment_does_not_copy_secrets_or_server_options(monkeypatch):

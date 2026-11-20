@@ -59,10 +59,10 @@ HEADS: dict[str, Head] = {
         id="rnnt",
         title="GigaAM v3 RNN-T",
         subtitle={
-            "en": "Low WER, but the vocabulary is Cyrillic only. Punctuation and "
-            "numbers come from a separate pass (RuPunct + ITN)",
-            "ru": "Минимальный WER, но словарь только кириллический. Пунктуация и "
-            "числа — отдельным проходом (RuPunct + ITN)",
+            "en": "Russian speech, lowercase Cyrillic. By default a separate pass adds punctuation "
+            "and converts number words to digits.",
+            "ru": "Русская речь, строчная кириллица. По умолчанию отдельная обработка расставляет "
+            "знаки препинания и записывает числа цифрами.",
         },
         languages=("ru",),
         native_punctuation=False,
@@ -78,10 +78,10 @@ HEADS: dict[str, Head] = {
         id="e2e_rnnt",
         title="GigaAM v3 RNN-T end-to-end",
         subtitle={
-            "en": "Punctuation, casing and numbers are built into the model. The only "
-            "vocabulary with capitals, Latin script and hyphens - and the lightest on memory",
-            "ru": "Пунктуация, регистр и числа встроены в модель. Единственный словарь "
-            "с заглавными, латиницей и дефисами — и самая лёгкая по памяти",
+            "en": "Writes Russian with punctuation, capitals and digits without a separate pass. "
+            "Its vocabulary also includes Latin letters and hyphens for names and terms.",
+            "ru": "Записывает русскую речь со знаками препинания, заглавными буквами и цифрами "
+            "без отдельной обработки. Для имён и терминов в словаре есть латиница и дефис.",
         },
         languages=("ru",),
         native_punctuation=True,
@@ -92,7 +92,7 @@ HEADS: dict[str, Head] = {
             "v3_e2e_rnnt_joint.onnx",
             "v3_e2e_rnnt_vocab.txt",
         ),
-        badge={"en": "best for Russian", "ru": "лучшая для русского"},
+        badge={"en": "low error on FLEURS ru", "ru": "низкая ошибка на FLEURS ru"},
         badge_note={
             "en": "Our own measurement, 11.08.2026: WER 4.32% on FLEURS ru against 6.56% "
             "for rnnt and 6.25% for ml_ctc_large; on live dictation without fillers, "
@@ -106,10 +106,10 @@ HEADS: dict[str, Head] = {
         id="ml_ctc",
         title="GigaAM Multilingual CTC",
         subtitle={
-            "en": "Five languages (ru, en, kk, ky, uz), Latin script in the vocabulary, "
-            "faster than RNN-T. Punctuation comes from the same pass, but you turn it on yourself",
-            "ru": "Пять языков (ru, en, kk, ky, uz), латиница в словаре, быстрее RNN-T. "
-            "Пунктуация — тем же проходом, но включите её вручную",
+            "en": "Russian, English, Kazakh, Kyrgyz and Uzbek. Outputs lowercase letters; "
+            "separate punctuation and number formatting are off in Auto mode.",
+            "ru": "Русский, английский, казахский, кыргызский и узбекский. Пишет строчными буквами. "
+            "В режиме «Авто» отдельное оформление пунктуации и чисел выключено.",
         },
         languages=("ru", "en", "kk", "ky", "uz"),
         native_punctuation=False,
@@ -120,21 +120,21 @@ HEADS: dict[str, Head] = {
         id="ml_ctc_large",
         title="GigaAM Multilingual CTC Large",
         subtitle={
-            "en": "The same languages with a 600M encoder - more accurate and slower",
-            "ru": "Тот же набор языков, энкодер 600M — точнее и медленнее",
+            "en": "The larger five-language CTC variant (600M parameters). "
+            "Like the smaller variant, it outputs lowercase letters by default.",
+            "ru": "Увеличенная модель для тех же пяти языков: 600 млн параметров. "
+            "Как и младшая версия, по умолчанию пишет строчными буквами.",
         },
         languages=("ru", "en", "kk", "ky", "uz"),
         native_punctuation=False,
         size_mb=564,
         files=("multilingual_large_ctc.int8.onnx", "multilingual_vocab.txt"),
-        badge={"en": "best multilingual", "ru": "лучшая мультиязычная"},
+        badge={"en": "larger memory footprint", "ru": "требует больше памяти"},
         badge_note={
-            "en": "Our own measurement, 11.08.2026: WER 6.25% on FLEURS ru against ml_ctc, "
-            "plus five languages. Twice as slow as e2e_rnnt and 2.5 GiB on the first run. "
-            "Details in docs/research/head-choice-and-wer.md",
-            "ru": "Это наш замер 11.08.2026: WER 6.25% на FLEURS ru против ml_ctc, "
-            "и пять языков. Вдвое медленнее e2e_rnnt и 2.5 ГиБ на первом запуске. "
-            "Подробности - docs/research/head-choice-and-wer.md",
+            "en": "Our own measurement on first startup: 2,538 MiB peak for ml_ctc_large, "
+            "1,078 MiB for e2e_rnnt. These are peak values, not steady-state usage.",
+            "ru": "Это наш замер пика памяти при первом запуске: 2 538 МиБ у ml_ctc_large "
+            "и 1 078 МиБ у e2e_rnnt. После загрузки расход памяти ниже.",
         },
     ),
 }
@@ -147,8 +147,11 @@ _OPENAI_IDS = {
 }
 
 
+PUBLIC_MODEL_ID = "kamerton"
+
+
 def openai_model_id(head_id: str) -> str:
-    """Model id exposed through `GET /v1/models`."""
+    """Историческое клиентское имя головы (до появления `kamerton`)."""
     return _OPENAI_IDS.get(head_id, head_id)
 
 

@@ -79,16 +79,20 @@ The first run downloads about 230 MB of weights and keeps them in `models/`.
 - **Journal** shows recent deployment and engine events. It holds up to 200
   entries in memory and starts fresh when the console process restarts.
 - **Compare** runs two already downloaded models on one file, one after the
-  other, without switching the model that serves the API. To enable it, set
-  `ENABLE_MODEL_COMPARE=1` and a non-empty `API_KEY` in `.env`, then recreate
-  the container. Each run uses a separate process and shares CPU and memory with
-  the live model. Deployment or recovery takes priority and can stop a comparison.
-  Its duration includes loading the model, not the HTTP upload. Comparison runs omit VAD, the glossary and separate punctuation
-  and number-normalization passes; formatting built into the model remains.
+  other, without switching the model that serves the API. The owner can turn
+  comparison on or off without restarting; the local profile needs a non-empty
+  `API_KEY`. Turning it off prevents new runs without interrupting a run already
+  in progress. Deployment and recovery take priority and can interrupt that run.
+  Each run uses separate processes and shares CPU and memory with the live model.
+  Timing includes loading the weights, not uploading the file. VAD, the glossary,
+  and separate punctuation and number-normalization passes are off; formatting
+  built into the model remains.
 
 [Screenshot: two models transcribing the same recording](docs/console-compare.png)
 
 ## Which model to pick
+
+The default image uses gigastt `2.22.0`. See the [engine and model compatibility report (in Russian)](docs/research/gigastt-compatibility.md) for the checked version, weights, and supported options.
 
 | Model | Languages | Punctuation | Our WER, FLEURS ru | 165 s of audio | Badge |
 |---|---|---|--:|--:|---|
@@ -134,7 +138,10 @@ took about 19 seconds to transcribe.
 
 The engine splits long recordings into overlapping windows. It processes them
 sequentially by default. `FILE_WINDOW_CONCURRENCY=2` can use a free slot when
-`POOL_SIZE` is at least 2; the effect depends on the model
+`POOL_SIZE` is at least 2. The setting works with RNN-T and CTC heads and cannot
+exceed the pool size. An explicitly invalid pair is rejected; when a smaller pool
+is selected without specifying a new window count, the inherited value is capped
+at the pool size. The effect depends on the model
 ([measurements, in Russian](docs/research/long-form-seams.md)). We tested silence
 skipping (`VAD=1`): on 3-10 minute recordings it saves 20-30% of the time but changes
 3% of the words, and on short dictation it is actually slower - so it stays off
@@ -153,7 +160,7 @@ The API is OpenAI-compatible, so any client that accepts a `base_url` will work:
 
 ```sh
 curl -X POST http://<server>:8091/v1/audio/transcriptions \
-  -F model=whisper-1 \
+  -F model=kamerton \
   -F file=@recording.wav
 ```
 
@@ -162,13 +169,21 @@ from openai import OpenAI
 
 client = OpenAI(base_url="http://<server>:8091/v1", api_key="not-needed")
 with open("recording.wav", "rb") as audio:
-    print(client.audio.transcriptions.create(model="whisper-1", file=audio).text)
+    print(client.audio.transcriptions.create(model="kamerton", file=audio).text)
 ```
 
+Use `model=kamerton` in new clients. `GET /v1/models` lists that one stable ID;
+its `variant` reports the head actually running in the console, or `null` if
+none is running. Older IDs such as `whisper-1` and `gigaam-v3-rnnt` still work;
+no value of `model` switches the deployed head.
+
 Supported: `response_format` = `json`, `text`, `srt`, `vtt`, `verbose_json`;
-`timestamp_granularities[]` = `word` / `segment`; `stream=true` (SSE); audio formats
-WAV, MP3, M4A/AAC, OGG/Vorbis, OGG/Opus, FLAC and WebM/Opus. The `model` field may hold
-anything - the head you deployed is the one that runs.
+`timestamp_granularities[]` (or `timestamp_granularities`) = `word` and/or
+`segment`; `stream=true` (SSE); WAV, MP3, M4A/AAC, OGG/Vorbis, OGG/Opus, FLAC
+and WebM/Opus. The console forwards the audio without converting it. Service
+status shows the original basename, without paths, for recent uploads to the
+OpenAI transcription endpoint or the console's dictation test. The list is
+kept in memory; comparisons do not enter the list.
 
 Not supported: `/v1/audio/translations` (GigaAM does not translate speech) and the
 `prompt` field - context is set through the glossary.
@@ -189,13 +204,14 @@ key. Comparison also requires an explicit opt-in.
 | Path | Behind the key | What it does |
 |---|---|---|
 | `POST /v1/audio/transcriptions` | yes | Recognition, OpenAI-compatible |
-| `GET /v1/models` | yes | Four heads plus `whisper-1` for clients with a hardcoded name |
+| `GET /v1/models` | yes | Stable `kamerton` model ID and current head (`variant`) |
 | `POST /v1/audio/translations` | yes | Always `400`: GigaAM does not translate speech |
 | `GET/POST/DELETE /v1/...` | yes | Passthrough for the engine's remaining native endpoints |
 | `GET /api/status`, `/api/models`, `/api/glossary` | yes | Data for the web console |
 | `POST /api/deploy`, `/api/stop`, `/api/glossary` | yes | Deploy a head, stop the engine, apply the glossary |
 | `POST /api/test` | yes | One-off recognition with timing and RTF |
 | `POST /api/compare` | yes, mandatory | Compare two downloaded models on one file; off by default |
+| `PUT /api/settings/compare` | yes, mandatory | Save `{"enabled":true}` or `{"enabled":false}` and return the effective value; `GET /api/status` exposes `compare_enabled` |
 | `GET /api/journal` | yes | Structured deployment and engine events |
 | `GET /api/events` | yes | SSE: status, download progress, technical logs |
 | `GET /api/docs`, `/api/openapi.json` | yes | Swagger UI and the schema of the control API |
@@ -263,14 +279,14 @@ back after a restart.
 
 The full list with explanations is in [`.env.example`](.env.example). The essentials:
 
-Console settings: read when the container starts, not selectable in the console.
+Console environment variables are read when the container starts.
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `HOST_BIND` | `127.0.0.1` | Host interface for the published port |
 | `HOST_PORT` | `8091` | Port on the host |
 | `API_KEY` | empty | If set, `Authorization: Bearer <key>` is required |
-| `ENABLE_MODEL_COMPARE` | `0` | Enable the comparison of two downloaded models; requires `API_KEY` |
+| `ENABLE_MODEL_COMPARE` | `0` | Initial comparison setting when no value is saved in `data/state.json`; requires the owner profile or a non-empty local `API_KEY` |
 | `AUTOSTART` | `1` | Bring up the last model when the container starts |
 | `MAX_UPLOAD_MB` | `150` | File size limit; the engine is given the same value, with headroom |
 | `HF_TOKEN` | empty | Not needed: weights come from GitHub Releases |
@@ -283,12 +299,12 @@ needed for a headless deployment.
 |---|---|---|
 | `INITIAL_CONTEXT` | empty | Glossary |
 | `MODEL_VARIANT` | `rnnt` | Head |
-| `PUNCTUATION` / `ITN` | `auto` | Punctuation and numbers as digits |
+| `PUNCTUATION` / `ITN` | `auto` | Separate punctuation and Russian number-normalization passes. `auto` enables them for `rnnt` only; `off` does not remove `e2e_rnnt`'s built-in formatting |
 | `HOTWORDS_BOOST` | `5.0` | Strength of the glossary hint |
 | `HOTWORDS_DEFAULT` | `1` | Built-in dictionary of 30 consumer brands |
 | `VAD` | `0` | Silence skipping: saves time on long recordings, changes the text |
 | `POOL_SIZE` | `1` | 1 = minimum latency, best for dictation |
-| `FILE_WINDOW_CONCURRENCY` | `1` | Windows of a long file processed at once; only works with `POOL_SIZE` of 2 or more |
+| `FILE_WINDOW_CONCURRENCY` | `1` | Concurrent windows of a long file; cannot exceed `POOL_SIZE` |
 
 **The choice of head lives in the state, not in `.env`.** What is deployed is stored in
 `data/state.json`, and after the first deployment that beats `.env`: otherwise the head

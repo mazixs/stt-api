@@ -12,6 +12,26 @@ at `/api/openapi.json` (`info.version`) read it from there.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-20
+
+### English
+
+- The glossary uses the full width of its panel. Startup settings explain which controls are unavailable for the selected configuration and why.
+- The facade preserves repeated timestamp fields when a client requests both words and segments. On first startup, the engine now honors the file-window concurrency setting from `.env`.
+- `GET /v1/models` lists one stable client model ID, `kamerton`. The console selects the active GigaAM variant. Existing clients can keep their previous model names in transcription requests. Creating an API key now shows its Base URL, key, and model ID together.
+- Owners can enable or disable model comparison without restarting the console. The choice persists; `ENABLE_MODEL_COMPARE` supplies the initial value.
+- Recent requests distinguish file uploads, microphone recordings, and API calls. Uploaded audio reaches the engine without re-encoding.
+- The [GigaSTT 2.22.0 compatibility report](docs/research/gigastt-compatibility.md) covers weight sources, the October RNN-T package, speaker diarization, and timings for all four variants on the same recording.
+
+### Русский
+
+- Длинный глоссарий использует всю ширину карточки. Настройки запуска объясняют ограничения выбранного режима и показывают, почему отдельные поля недоступны.
+- Фасад сохраняет повторные запросы таймкодов слов и сегментов. При первом запуске из `.env` применяется заданное число параллельно обрабатываемых частей файла.
+- API-клиент подключается к одной модели `kamerton`; активный вариант GigaAM выбирается в консоли. Старые имена в запросах распознавания остаются совместимыми. После создания ключа консоль показывает Base URL, ключ и ID модели.
+- Владелец может включать и выключать сравнение скачанных моделей без перезапуска консоли. Выбор сохраняется; `ENABLE_MODEL_COMPARE` задаёт начальное значение.
+- В статусе консоли различаются загрузка файла, запись с микрофона и клиентский API. Загруженное аудио передаётся движку без перекодирования.
+- [Сверка с GigaSTT 2.22.0](docs/research/gigastt-compatibility.md): источники весов, октябрьский пакет RNN-T, диаризация и замеры четырёх вариантов на одной записи.
+
 ## [1.5.0] - 2026-11-19
 
 ### Added
@@ -240,7 +260,8 @@ fixes, not construction.
 - Licensed under Apache 2.0; the repository history begins with a single commit made
   when the sources were opened.
 
-[Unreleased]: https://github.com/mazixs/stt-api/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/mazixs/stt-api/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/mazixs/stt-api/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/mazixs/stt-api/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/mazixs/stt-api/releases/tag/v1.4.0
 [1.3.0]: https://github.com/mazixs/stt-api/releases/tag/v1.3.0

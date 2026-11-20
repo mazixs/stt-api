@@ -328,7 +328,7 @@ async def test_glossary_reports_env_phrases_missing_from_the_list(client_ready):
 async def test_models_expose_badges(client_ready):
     """Без `lang` каталог отвечает по-английски: это язык интерфейса по умолчанию."""
     heads = {h["id"]: h for h in (await client_ready.get("/api/models")).json()["heads"]}
-    assert heads["e2e_rnnt"]["badge"] == "best for Russian"
+    assert heads["e2e_rnnt"]["badge"] == "low error on FLEURS ru"
     assert heads["rnnt"]["badge"] is None
 
 
@@ -364,6 +364,42 @@ async def test_deploy_rejects_absurd_window_concurrency(client_ready):
         "/api/deploy", json={"variant": "rnnt", "file_window_concurrency": 99}
     )
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("pool_size", [1, 2])
+async def test_deploy_rejects_more_windows_than_slots_without_restarting(client_ready, pool_size):
+    supervisor = client_ready.app.state.supervisor
+    pid = supervisor.process.pid
+    response = await client_ready.post("/api/deploy", json={
+        "variant": "ml_ctc", "pool_size": pool_size, "file_window_concurrency": pool_size + 1,
+    })
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_file_window_concurrency"
+    assert not client_ready.app.state.deploy_tasks
+    assert supervisor.process.pid == pid
+
+
+async def test_deploy_rejects_unknown_flag(client_stopped):
+    response = await client_stopped.post("/api/deploy", json={"variant": "rnnt", "unsupported_flag": True})
+    assert response.status_code == 422
+    assert not client_stopped.app.state.deploy_tasks
+
+
+async def test_head_and_pool_change_adapt_only_inherited_window_limit(console_settings):
+    settings = console_settings.model_copy(update={"pool_size": 3, "file_window_concurrency": 3})
+    async with await _client(settings) as client:
+        supervisor = client.app.state.supervisor
+        try:
+            status = (await client.get("/api/status")).json()
+            assert status["defaults"]["file_window_concurrency"] == 3
+            assert status["env"]["diverges"] == {}
+            response = await client.post("/api/deploy", json={"variant": "ml_ctc", "pool_size": 2})
+            assert response.status_code == 202
+            assert response.json()["config"]["file_window_concurrency"] == 2
+            await client.app.state.deploy_task
+            assert supervisor.current.file_window_concurrency == 2
+        finally:
+            await supervisor.shutdown()
 
 
 async def test_status_reports_window_concurrency(client_ready):

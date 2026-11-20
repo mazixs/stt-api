@@ -1,3 +1,4 @@
+import os
 import re
 from html.parser import HTMLParser
 from pathlib import Path
@@ -37,10 +38,9 @@ def test_glossary_starts_locked_and_file_pickers_are_native():
 
 def test_example_origin_is_isolated_from_transport_and_key():
     js = (STATIC / "app.js").read_text(encoding="utf-8")
-    uses = re.findall(r"\bexampleOrigin\(\)", js)
-    assert len(uses) == 2  # определение и только рендер примеров
+    assert 'return url.origin + "/v1"' in js or 'url.origin + "/v1" : null' in js
     snippets = js.split("function renderSnippets()", 1)[1].split("\n}", 1)[0]
-    assert "exampleOrigin()" in snippets and '"/api/docs?api_key="' in snippets
+    assert "clientBase()" in snippets and '"/api/docs?api_key="' in snippets
     assert not re.search(r"\b(?:fetch|api)\(", snippets)
     assert "state.key" not in snippets.split('$("link-docs")')[0]
     assert 'mode: "same-origin"' in js and 'redirect: "error"' in js
@@ -265,7 +265,7 @@ async def test_ui_offers_window_concurrency_and_names_its_condition(client_ready
     js = (await client_ready.get("/static/app.js")).text
     assert "opt-window-concurrency" in html
     texts = (await client_ready.get("/static/i18n.js")).text
-    assert "нужен пул 2" in texts and "needs pool 2" in texts
+    assert "части длинной записи обрабатываются по очереди" in texts and "Unavailable with one simultaneous request" in texts
     assert "file_window_concurrency" in js
 
 
@@ -317,9 +317,9 @@ async def test_head_descriptions_come_translated_from_the_server(client_ready):
     unknown = (await client_ready.get("/api/models", params={"lang": "xx"})).json()
     by_id = {head["id"]: head for head in english["heads"]}
     assert "vocabulary" in by_id["e2e_rnnt"]["subtitle"]
-    assert by_id["e2e_rnnt"]["badge"] == "best for Russian"
+    assert by_id["e2e_rnnt"]["badge"] == "low error on FLEURS ru"
     ru_by_id = {head["id"]: head for head in russian["heads"]}
-    assert ru_by_id["e2e_rnnt"]["badge"] == "лучшая для русского"
+    assert ru_by_id["e2e_rnnt"]["badge"] == "низкая ошибка на FLEURS ru"
     # Названия моделей не переводятся, переводятся только пояснения.
     assert ru_by_id["e2e_rnnt"]["title"] == by_id["e2e_rnnt"]["title"]
     assert unknown["heads"] == english["heads"]  # неизвестный язык - английский
@@ -410,7 +410,9 @@ async def test_mobile_feedback_and_model_list_in_chrome(live_client):
 async def chrome_page(live_client):
     pw = pytest.importorskip("playwright.async_api")
     async with pw.async_playwright() as driver:
-        browser = await driver.chromium.launch(channel="chrome")
+        browser = await driver.chromium.launch(channel="chrome", args=[
+            "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream",
+        ])
         try:
             yield await browser.new_page(), pw.expect
         finally:
@@ -467,3 +469,168 @@ async def test_bearer_switch_discards_manual_copy_in_chrome(chrome_page, live_cl
     await copy.click()
     assert await manual.input_value() == await page.locator("#snip-curl").text_content()
     assert "Authorization" not in await manual.input_value()
+
+
+async def test_deployment_dependencies_and_old_defaults_in_chrome(chrome_page, live_client):
+    from console.state import EngineConfig
+
+    page, expect = chrome_page
+    supervisor = live_client.app.state.supervisor
+    await supervisor.deploy(EngineConfig(variant="rnnt", punctuation="off", itn="on", pool_size=4,
+                                         file_window_concurrency=3, hotwords_default=True, hotwords_boost=4.25))
+    await page.goto(str(live_client.base_url) + "/#settings")
+    pool, windows = page.locator("#opt-pool"), page.locator("#opt-window-concurrency")
+    await expect(windows).to_have_value("3")
+    await expect(page.locator("#opt-boost")).to_have_value("4.25")
+    await expect(page.locator("#opt-punctuation")).to_have_value("off")
+    await expect(page.locator("#opt-itn")).to_have_value("on")
+    await pool.select_option("2")
+    await expect(windows).to_have_value("2")
+    await expect(windows.locator('option[value="3"]')).to_be_disabled()
+    await pool.select_option("1")
+    await expect(windows).to_be_disabled()
+    await expect(windows).to_have_value("1")
+    await page.locator("#opt-hotwords-default").select_option("false")
+    await expect(page.locator("#opt-boost")).to_be_disabled()
+    for lang, note in [("ru", "Недоступно"), ("en", "Unavailable")]:
+        await page.locator(f'.lang-option[data-lang="{lang}"]:visible').click()
+        await expect(page.locator("#window-note")).to_contain_text(note)
+        await expect(page.locator("#boost-note")).to_contain_text(note)
+    for variant in ("e2e_rnnt", "ml_ctc", "ml_ctc_large", "rnnt"):
+        await page.locator('.cfghead a[href="#models"]').click()
+        await page.locator("#target-" + variant).check()
+        await page.locator('[data-page=models] a[href="#settings"]').click()
+        await expect(page.locator("#opt-punctuation")).to_be_enabled()
+        await expect(page.locator("#opt-itn")).to_be_enabled()
+        await expect(page.locator("#punctuation-note")).to_contain_text({
+            "rnnt": "Auto runs", "e2e_rnnt": "already adds", "ml_ctc": "CTC", "ml_ctc_large": "CTC",
+        }[variant])
+    async with page.expect_request(lambda r: r.method == "POST" and r.url.endswith("/api/deploy")) as posted:
+        await page.locator("#btn-deploy").click()
+    config = (await posted.value).post_data_json
+    assert config["file_window_concurrency"] == config["pool_size"] == 1
+    assert config["hotwords_default"] is False and "hotwords_boost" not in config
+
+
+async def test_env_deploy_uses_exact_snapshot_and_rejects_conflict(chrome_page, live_client):
+    from conftest import wait_for
+    from console.state import EngineConfig
+
+    page, expect = chrome_page
+    supervisor = live_client.app.state.supervisor
+    settings = live_client.app.state.settings
+    await supervisor.deploy(EngineConfig(hotwords_default=False, hotwords_boost=5))
+    settings.hotwords_default, settings.hotwords_boost = False, 8
+    settings.pool_size, settings.file_window_concurrency = 1, 2
+    requests = []
+    page.on("request", lambda req: requests.append(req.post_data_json) if req.url.endswith("/api/deploy") else None)
+    await page.goto(str(live_client.base_url) + "/#settings")
+    env = page.locator("#btn-deploy-env")
+    await expect(env).to_be_visible()
+    await expect(env).to_be_disabled()
+    await expect(page.locator("#env-error")).to_contain_text("FILE_WINDOW_CONCURRENCY")
+    await page.locator('.lang-option[data-lang="ru"]:visible').click()
+    await expect(page.locator("#env-error")).to_contain_text("частей одновременно: 2")
+    await env.evaluate("button => button.click()")
+    assert not requests and supervisor.current.hotwords_boost == 5
+    settings.file_window_concurrency = 1
+    await page.reload()
+    await expect(env).to_be_enabled()
+    await expect(page.locator("#opt-boost")).to_be_disabled()
+    await page.locator("#opt-punctuation").select_option("on")
+    await page.route("**/api/deploy", lambda r: r.fulfill(status=503), times=1)
+    await env.click()
+    await expect(page.locator("#env-error")).to_contain_text("503")
+    await expect(page.locator("#opt-punctuation")).to_have_value("on")
+    await expect(page.locator("#draft-note")).not_to_be_empty()
+    await env.click()
+    await wait_for(lambda: supervisor.status == "ready" and supervisor.current and supervisor.current.hotwords_boost == 8)
+    assert requests == [supervisor.env_config().to_dict()] * 2
+    assert supervisor.current.hotwords_default is False and supervisor.current.punctuation == "auto"
+
+
+async def test_microphone_and_selected_filename_in_chrome(chrome_page, live_client):
+    from console.state import EngineConfig
+
+    page, expect = chrome_page
+    await live_client.app.state.supervisor.deploy(EngineConfig())
+    await page.goto(str(live_client.base_url))
+    await page.locator("#btn-record").click()
+    # Реальный AudioWorklet получает кадры виртуального устройства Chrome, а не пользовательского микрофона.
+    await page.wait_for_function("state.recording?.chunks.reduce((n, a) => n + a.length, 0) >= 8000")
+    await page.locator("#btn-record").click()
+    await expect(page.locator("#result")).to_be_visible()
+    await page.locator("#file-mode").click()
+    name = "synthetic sample 07.wav"
+    await page.locator("#file-input").set_input_files({"name": name, "mimeType": "audio/wav", "buffer": wav_bytes()})
+    await expect(page.locator("#source-state")).to_have_text(name)
+    await page.locator("#btn-send").click()
+    await expect(page.locator("#result")).to_be_visible()
+    await page.locator('#railnav a[href="#status"]').click()
+    rows = page.locator("#recent-rows tr")
+    await expect(rows.nth(0)).to_contain_text(name)
+    await expect(rows.nth(0)).to_contain_text("Uploaded file")
+    await expect(rows.nth(1)).to_contain_text("microphone.wav")
+    await expect(rows.nth(1)).to_contain_text("Live microphone")
+
+
+async def test_compare_switch_without_engine_restart_in_chrome(chrome_page, live_client, monkeypatch, tmp_path):
+    from conftest import wait_for
+    from console.state import EngineConfig
+
+    page, expect = chrome_page
+    supervisor = live_client.app.state.supervisor
+    await supervisor.deploy(EngineConfig(variant="rnnt"))
+    await supervisor.deploy(EngineConfig(variant="e2e_rnnt"))
+    pid = supervisor.process.pid
+    origin = str(live_client.base_url)
+    await page.goto(origin + "/#compare")
+    toggle = page.locator("#compare-enabled")
+    await expect(page.locator("#compare-toggle-note")).to_contain_text("without access protection")
+    await expect(toggle).to_be_disabled()
+    live_client.app.state.settings.api_key = "ui-synthetic-local"
+    await page.evaluate("localStorage.setItem('stt_console_key','ui-synthetic-local')")
+    await page.reload()
+    await page.route("**/api/settings/compare", lambda r: r.fulfill(status=503, json={
+        "error": {"code": "compare_settings_unavailable", "message": "Temporary write failure"},
+    }), times=1)
+    await toggle.check()
+    await expect(page.locator("#compare-toggle-error")).to_contain_text("could not be saved")
+    await expect(toggle).not_to_be_checked()
+    assert not supervisor.compare_enabled
+    async with page.expect_request(lambda r: r.method == "PUT" and r.url.endswith("/api/settings/compare")) as sent:
+        await toggle.check()
+    assert (await sent.value).post_data_json == {"enabled": True}
+    await expect(page.locator("#compare-form")).to_be_visible()
+    await page.reload()
+    await expect(toggle).to_be_checked()
+    await page.locator("#compare-file").set_input_files({"name": "comparison.wav", "mimeType": "audio/wav", "buffer": wav_bytes()})
+    await page.locator("#btn-compare").click()
+    await expect(page.locator("#compare-results .panel")).to_have_count(2)
+    for width in (320, 390, 1440):
+        await page.set_viewport_size({"width": width, "height": 844 if width < 500 else 900})
+        for lang in ("ru", "en"):
+            await page.locator(f'.lang-option[data-lang="{lang}"]:visible').click()
+            await expect(page.locator("#compare-form")).to_be_visible()
+            assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+            if folder := os.environ.get("KAMERTON_UI_ARTIFACTS"):
+                Path(folder).mkdir(parents=True, exist_ok=True)
+                await page.screenshot(path=Path(folder) / f"compare-{width}-{lang}.png")
+    await toggle.uncheck()
+    await expect(page.locator("#compare-form")).to_be_hidden()
+    await expect(page.locator("#compare-results .panel")).to_have_count(0)
+    assert not supervisor.compare_enabled and supervisor.process.pid == pid
+
+    # Выключение во время уже запущенного CLI закрывает только новые задания.
+    from console import compare
+
+    record = tmp_path / "synthetic-compare-started.jsonl"
+    cli_env = compare._cli_env() | {"FAKE_COMPARE_RECORD": str(record), "FAKE_COMPARE_DELAY": "0.5"}
+    monkeypatch.setattr(compare, "_cli_env", lambda: cli_env.copy())
+    await toggle.check()
+    await page.locator("#btn-compare").click()
+    await wait_for(record.exists)
+    await toggle.uncheck()
+    await expect(page.locator("#compare-form")).to_be_hidden()
+    await expect(page.locator("#compare-results .panel")).to_have_count(2)
+    assert not supervisor.compare_enabled and supervisor.process.pid == pid

@@ -50,8 +50,13 @@ class Supervisor:
         # двуязычный, а переводить обратно уже собранное предложение нельзя.
         self._detail_code: str | None = None
         self._detail_params: dict[str, Any] = {}
-        self._desired: EngineConfig | None = stored.desired
-        self._last_good: EngineConfig | None = stored.last_good
+        self._desired = self._fit_stored_config(stored.desired)
+        self._last_good = self._fit_stored_config(stored.last_good)
+        self._compare_enabled = (
+            settings.enable_model_compare if stored.compare_enabled is None else stored.compare_enabled
+        )
+        self._compare_storage_ready = True
+        self.compare_epoch = 0
         self._download_percent: int | None = None
         # Цель развертывания, а не работающий процесс: пока веса качаются, работающего
         # процесса может не быть вовсе, а карточке в консоли уже есть что показать.
@@ -120,17 +125,20 @@ class Supervisor:
     def glossary_count(self) -> int:
         return len(parse_context(read_glossary(self.settings.hotwords_path)))
 
+    def _fit_stored_config(self, stored: EngineConfig | None) -> EngineConfig | None:
+        if stored is None:
+            return None
+        fitted = stored.fit_window_concurrency()
+        if fitted != stored:
+            self.bus.publish_log(
+                f"Сохранённая модель {stored.variant}: число параллельных окон "
+                f"уменьшено с {stored.file_window_concurrency} до размера пула {stored.pool_size}."
+            )
+        return fitted
+
     def default_config(self) -> EngineConfig:
-        """Config preselected in the UI: last deployment, else the .env values."""
-        return self._desired or self._last_good or EngineConfig(
-            variant=self.settings.model_variant,
-            punctuation=self.settings.punctuation,
-            itn=self.settings.itn,
-            vad=self.settings.vad,
-            pool_size=self.settings.pool_size,
-            hotwords_boost=self.settings.hotwords_boost,
-            hotwords_default=self.settings.hotwords_default,
-        )
+        """Конфигурация для кабинета: последнее развёртывание или значения .env."""
+        return self._desired or self._last_good or self.env_config().fit_window_concurrency()
 
     def env_config(self) -> EngineConfig:
         """То, что просит `.env`, без оглядки на сохраненное состояние."""
@@ -184,14 +192,7 @@ class Supervisor:
         self._detail_params = params or {}
         if status not in ("downloading", "starting"):
             self._deploying = None
-        self.state_file.save(
-            State(
-                status=status,
-                detail=detail,
-                desired=self._desired,
-                last_good=self._last_good,
-            )
-        )
+        self._persist_state(self._compare_enabled)
         self.bus.publish(
             {
                 "type": "status",
@@ -204,12 +205,48 @@ class Supervisor:
             }
         )
 
+    def _persist_state(self, compare_enabled: bool) -> None:
+        self.state_file.save(State(
+            status=self._status,
+            detail=self._detail,
+            desired=self._desired,
+            last_good=self._last_good,
+            compare_enabled=compare_enabled,
+        ))
+
     # ------------------------------------------------------------------ compare gate
+
+    @property
+    def compare_available(self) -> bool:
+        return self._compare_storage_ready and (self.settings.owner_access or bool(self.settings.api_key))
+
+    @property
+    def compare_enabled(self) -> bool:
+        return self.compare_available and self._compare_enabled
+
+    def block_compare_storage(self) -> None:
+        self._compare_storage_ready = False
+
+    def set_compare_enabled(self, enabled: bool) -> None:
+        if not (self.settings.owner_access or self.settings.api_key):
+            raise ApiError(403, "Для сравнения требуется защищённый режим или ключ API.", "compare_auth_required")
+        if enabled and not self._compare_storage_ready:
+            raise ApiError(503, "Временный каталог сравнения недоступен.", "compare_storage_unavailable", "server_error")
+        # Нет await: настройки и переходы движка не могут перезаписать снимок друг друга.
+        # При сбое диска эффективное значение остаётся прежним.
+        try:
+            self._persist_state(enabled)
+        except OSError:
+            raise ApiError(503, "Не удалось сохранить настройки сравнения.", "compare_settings_unavailable", "server_error") from None
+        if self._compare_enabled and not enabled:
+            self.compare_epoch += 1
+        self._compare_enabled = enabled
 
     @property
     def comparison_allowed(self) -> bool:
         recovering = self._restart_task is not None and not self._restart_task.done()
-        return not (self._shutting_down or self._lock.locked() or recovering)
+        reloading = self._native_reload_task is not None and not self._native_reload_task.done()
+        return not (self._shutting_down or self._lock.locked() or recovering or reloading)
 
     def begin_comparison[T](
         self, run: Callable[[], Coroutine[Any, Any, T]],
