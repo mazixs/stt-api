@@ -12,6 +12,14 @@ at `/api/openapi.json` (`info.version`) read it from there.
 
 ## [Unreleased]
 
+### English
+
+- New [manual installation guide](docs/install.md) and deployment CLI for three setups: localhost, an existing HTTPS proxy, or bundled Caddy. The standalone NPM Compose file publishes one configurable HTTP port (8812 by default); it does not start Caddy or claim ports 80 and 443. The CLI remembers the installation profile for subsequent starts, backups and version updates.
+
+### Русский
+
+- Добавлены [руководство по ручной установке](docs/install.ru.md) и скрипт для трёх вариантов: на своём компьютере, за существующим HTTPS-прокси или с Caddy. Отдельный Compose для NPM публикует один настраиваемый HTTP-порт (по умолчанию 8812), не запускает Caddy и не занимает 80/443. Скрипт сохраняет выбранный профиль для следующих запусков, резервного копирования и обновления версии.
+
 ## [1.6.0] - 2026-11-20
 
 ### English

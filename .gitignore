@@ -4,6 +4,8 @@
 !.env.example
 !.env.local.example
 !.env.public.example
+!.env.npm.example
+.kamerton/
 /secrets/
 *.pem
 *.key

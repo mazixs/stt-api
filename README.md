@@ -4,8 +4,7 @@ Your own speech recognition server with an OpenAI-compatible API and the Kamerto
 web console. Choose a model, review its startup settings, and deploy it. Built for
 Russian dictation on your own machine - no cloud, no GPU.
 
-*Read this in [Russian](README.ru.md). The documents under [`docs/`](docs/) are in
-Russian only.*
+*Read this in [Russian](README.ru.md). Installation guide: [English](docs/install.md) · [Русский](docs/install.ru.md).*
 
 *The console is bilingual: English by default. Use the EN/RU switch to change
 languages. The browser remembers the choice.*
@@ -41,32 +40,13 @@ two cannot drift apart.
 
 ## Quick start
 
-```sh
-git clone https://github.com/mazixs/stt-api.git && cd stt-api
-cp .env.example .env          # optional: without .env the defaults apply
-docker compose up -d
-```
+Choose a route in the [installation guide](docs/install.md):
 
-Open `http://localhost:8091` on the Docker host. On Docker Engine 28 or later,
-the default loopback bind keeps this port off the LAN and the internet.
-[Older engines had a LAN exception](https://docs.docker.com/engine/network/port-publishing/).
+- **Try it on this machine:** open `http://localhost:8091`. No DNS or HTTPS setup.
+- **Already have Nginx Proxy Manager or another HTTPS proxy:** run Kamerton over HTTP on `8812` behind that proxy. No Caddy.
+- **No HTTPS proxy and ports 80/443 are free:** let Caddy provide HTTPS.
 
-**For an owner login and revocable keys for apps**, use the separate [HTTPS/Caddy profile](docs/public-access.md) (guide in Russian). Only Caddy publishes ports; clients use `https://your-domain/v1` and a Bearer key, not the owner's password. The quick start and the key permissions below describe the **local** profile.
-
-For private access to that local profile, keep the loopback bind and use an SSH tunnel,
-or put an HTTPS reverse proxy on the Docker host in front of `127.0.0.1:8091`.
-A browser needs trusted HTTPS to use the microphone from another device;
-`http://localhost` is an exception only on the machine running the browser.
-Before enabling remote access, set `API_KEY` in the `.env` next to
-`docker-compose.yml` and run `docker compose up -d --force-recreate --wait`.
-The running service does not reread `.env`. Check that an unauthenticated
-`GET http://127.0.0.1:8091/api/status` returns `401` before enabling the proxy.
-Keep the console behind a VPN or a trusted network: the same key allows both
-recognition and administration. Do not publish its HTTP port on the internet.
-
-Under **Models**, select **GigaAM v3 RNN-T
-end-to-end**, open its settings, and deploy it. Wait until the service is ready.
-The first run downloads about 230 MB of weights and keeps them in `models/`.
+Both HTTPS routes support an owner login and separate, revocable API keys for apps. The guide covers your first transcription, Arcane, and migration.
 
 ## Using the web console
 
@@ -156,18 +136,20 @@ custom `base_url` and by default pushes the finished text through an LLM cleanup
 
 ## Connecting a client
 
-The API is OpenAI-compatible, so any client that accepts a `base_url` will work:
+Use the OpenAI-compatible API with Base URL `http://localhost:8091/v1` for a local installation or `https://stt.example.org/v1` for HTTPS (replace `stt.example.org` with your name). HTTPS requires the client key created in the console, not the owner's password. See [your first transcription](docs/install.md#first-transcription) for both routes.
+
+For a local installation using the default empty `API_KEY`:
 
 ```sh
-curl -X POST http://<server>:8091/v1/audio/transcriptions \
-  -F model=kamerton \
-  -F file=@recording.wav
+curl --fail-with-body http://localhost:8091/v1/audio/transcriptions \
+  --form-string 'model=kamerton' \
+  --form 'file=@recording.wav'
 ```
 
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://<server>:8091/v1", api_key="not-needed")
+client = OpenAI(base_url="http://localhost:8091/v1", api_key="not-needed")
 with open("recording.wav", "rb") as audio:
     print(client.audio.transcriptions.create(model="kamerton", file=audio).text)
 ```
@@ -279,7 +261,7 @@ back after a restart.
 
 The full list with explanations is in [`.env.example`](.env.example). The essentials:
 
-Console environment variables are read when the container starts.
+Console environment variables are read when the container starts. For a CLI-managed local installation, set them before the first successful `start`; see the [installation guide](docs/install.md#stop-reinstall-back-up-and-roll-back) before changing an existing installation.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -356,14 +338,9 @@ not help, download the head's four weight files by hand from the
 [engine release](https://github.com/ekhodzitsky/gigastt/releases) and put them into
 `models/` - the console will see them and start without downloading.
 
-**The "Record from microphone" button does nothing.** Browsers
-grant microphone access only on `localhost` or over HTTPS: open the console through an
-SSH tunnel (`ssh -L 8091:localhost:8091 server`). File recognition always works.
+**Microphone, port, or HTTPS problems?** See [installation troubleshooting](docs/install.md#troubleshooting).
 
-**Logs.** Run `docker compose logs -f` or open **Technical logs** in the
-console's **Journal** to see engine output.
-
-**The port is taken.** Change `HOST_PORT` in `.env` and run `docker compose up -d`.
+**Logs.** Run `python3 scripts/kamerton.py logs --follow` for a CLI-managed installation, or open **Technical logs** in the console's **Journal**.
 
 **`400 Invalid multipart body` on a large file.** That was the behavior before 1.1.1.
 The console now sets the engine's limit itself, with headroom, and refuses with a
@@ -408,12 +385,7 @@ uv export --locked --no-dev --no-emit-project --no-header --no-annotate -o requi
 
 The export includes exact runtime versions and file hashes. The test suite checks for drift.
 
-The development overlay uses the `stt-api-local` Compose project and local image tag;
-it does not restart after reboot. To run one local instance alongside the base stack,
-use a separate checkout and an unused `HOST_PORT`: both configurations mount `data/`
-and `models/` from their checkout. The overlay is not meant to run multiple local
-instances. If an older overlay left a container named `stt-api-local`, stop and
-remove that local container before the first run.
+The development overlay runs directly through Compose, not through the installer. Use a separate checkout and an unused `HOST_PORT` if a CLI-managed installation already exists. Never run these commands against the installer's own data: Compose would start a second project using the same `data/` and `models/`. The development container uses the `stt-api-local` name and does not restart after reboot.
 
 ```sh
 cp .env.local.example .env.local
